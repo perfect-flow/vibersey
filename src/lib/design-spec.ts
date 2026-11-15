@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SPORTS, STANDARDS, PRODUCTS, defaultProduct, type Sport, type ProductKey } from "./catalog";
+import { SPORTS, STANDARDS, PRODUCTS, LOGO_POSITIONS, defaultProduct, type Sport, type ProductKey } from "./catalog";
 
 // Fonts bundled in /public/fonts. The same files are used for the browser
 // preview and for the server-side print-file render, so what the customer sees
@@ -12,6 +12,17 @@ export const FONTS = {
   teko: { family: "Teko", file: "Teko-Bold.ttf", label: "Teko athletic", weight: 700 },
   yellowtail: { family: "Yellowtail", file: "Yellowtail.ttf", label: "Script" },
   blackops: { family: "Black Ops One", file: "BlackOpsOne.ttf", label: "Stencil block" },
+  alfaslab: { family: "Alfa Slab One", file: "AlfaSlabOne.ttf", label: "Slab serif" },
+  bowlby: { family: "Bowlby One SC", file: "BowlbyOneSC.ttf", label: "Heavy block" },
+  bungee: { family: "Bungee", file: "Bungee.ttf", label: "Bungee block" },
+  russo: { family: "Russo One", file: "RussoOne.ttf", label: "Russo athletic" },
+  staatliches: { family: "Staatliches", file: "Staatliches.ttf", label: "Staatliches" },
+  squada: { family: "Squada One", file: "SquadaOne.ttf", label: "Squared" },
+  racing: { family: "Racing Sans One", file: "RacingSansOne.ttf", label: "Racing italic" },
+  kanit: { family: "Kanit", file: "Kanit-ExtraBoldItalic.ttf", label: "Speed italic", weight: 800, italic: true },
+  rubikmono: { family: "Rubik Mono One", file: "RubikMonoOne.ttf", label: "Wide block" },
+  marker: { family: "Permanent Marker", file: "PermanentMarker.ttf", label: "Brush marker" },
+  pacifico: { family: "Pacifico", file: "Pacifico.ttf", label: "Retro script" },
 } as const;
 export type FontKey = keyof typeof FONTS;
 const fontKeys = Object.keys(FONTS) as [FontKey, ...FontKey[]];
@@ -46,6 +57,10 @@ export const DesignSpecSchema = z.object({
     url: z.string().url().nullable().default(null),
     source: z.enum(["upload", "ai"]).nullable().default(null),
     prompt: z.string().nullable().default(null),
+    // where the logo goes; "auto" follows the sport's convention (see LOGO_SPOTS)
+    position: z.enum(LOGO_POSITIONS).default("auto"),
+    // size multiplier on top of the spot's standard size
+    scale: z.number().min(0.5).max(3).default(1),
   }),
   wordmark: z.object({
     show: z.boolean().default(true),
@@ -87,7 +102,7 @@ export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
     },
     pattern: { style: sport === "baseball" ? "pinstripes" : "solid", artworkUrl: null, artworkPrompt: null, opacity: 1 },
     trim: { yoke: sport === "hockey", hemStripes: sport === "hockey", sleeveStripes: sport === "football" || sport === "hockey" },
-    logo: { url: null, source: null, prompt: null },
+    logo: { url: null, source: null, prompt: null, position: "auto", scale: 1 },
     wordmark: {
       show: sport !== "hockey",
       text: "TEAM",

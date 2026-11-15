@@ -2,7 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { PRODUCTS, SPORTS, STANDARDS, productByKey, type ProductKey, type Sport } from "@/lib/catalog";
+import { LOGO_POSITIONS, PRODUCTS, SPORTS, STANDARDS, productByKey, type LogoPosition, type ProductKey, type Sport } from "@/lib/catalog";
+
+const LOGO_POSITION_LABELS: Record<LogoPosition, string> = {
+  auto: "Standard spot",
+  above_name: "Above team name",
+  center_chest: "Center chest (big)",
+  left_chest: "Left chest",
+  right_chest: "Right chest",
+  sleeves: "Sleeves",
+  upper_back: "Upper back",
+};
 import { FONTS, defaultSpec, type DesignSpec, type FontKey } from "@/lib/design-spec";
 import { fmt } from "@/lib/pricing";
 import { JerseyPreview } from "./JerseyPreview";
@@ -181,7 +191,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
     setNotice(null);
     if (kind === "logo") {
       await ensureDesign();
-      patchSpec((s) => ({ ...s, logo: { url: data.url, source: "upload", prompt: null } }));
+      patchSpec((s) => ({ ...s, logo: { ...s.logo, url: data.url, source: "upload", prompt: null } }));
     } else setInspiration(data.url);
   }
 
@@ -325,7 +335,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
               className="input"
               value={spec.sample.name}
               maxLength={16}
-              onChange={(e) => patchSpec((s) => ({ ...s, sample: { ...s.sample, name: e.target.value.toUpperCase() } }))}
+              onChange={(e) => patchSpec((s) => ({ ...s, sample: { ...s.sample, name: e.target.value.toUpperCase() }, lettering: { ...s.lettering, showName: s.lettering.showName || e.target.value.trim() !== "" } }))}
             />
           </div>
           <div>
@@ -344,8 +354,30 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
               className="input"
               value={spec.wordmark.text}
               maxLength={30}
-              onChange={(e) => patchSpec((s) => ({ ...s, wordmark: { ...s.wordmark, text: e.target.value, show: true } }))}
+              onChange={(e) => patchSpec((s) => ({ ...s, teamName: e.target.value, wordmark: { ...s.wordmark, text: e.target.value, show: e.target.value.trim() !== "" } }))}
             />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-muted">
+            <input
+              type="checkbox"
+              checked={spec.lettering.showName}
+              onChange={(e) => patchSpec((s) => ({ ...s, lettering: { ...s.lettering, showName: e.target.checked } }))}
+            />
+            Player name on back
+          </label>
+          <div>
+            <span className="label">Team name font</span>
+            <select
+              className="input"
+              value={spec.wordmark.font}
+              onChange={(e) => patchSpec((s) => ({ ...s, wordmark: { ...s.wordmark, font: e.target.value as FontKey } }))}
+            >
+              {Object.entries(FONTS).map(([k, f]) => (
+                <option key={k} value={k}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="sm:col-span-2 lg:col-span-3">
             <span className="label">Colors</span>
@@ -384,6 +416,36 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
               </select>
             </div>
           ))}
+          {spec.logo.url && (
+            <>
+              <div>
+                <span className="label">Logo position</span>
+                <select
+                  className="input"
+                  value={spec.logo.position ?? "auto"}
+                  onChange={(e) => patchSpec((s) => ({ ...s, logo: { ...s.logo, position: e.target.value as LogoPosition } }))}
+                >
+                  {LOGO_POSITIONS.filter((p) => p !== "sleeves" || product.placements.includes("sleeve_left")).map((p) => (
+                    <option key={p} value={p}>
+                      {LOGO_POSITION_LABELS[p]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <span className="label">Logo size</span>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={3}
+                  step={0.1}
+                  value={spec.logo.scale ?? 1}
+                  onChange={(e) => patchSpec((s) => ({ ...s, logo: { ...s.logo, scale: Number(e.target.value) } }))}
+                  className="mt-3 w-full accent-[var(--color-volt)]"
+                />
+              </div>
+            </>
+          )}
           <div>
             <span className="label">Logo</span>
             <label className="btn-ghost w-full cursor-pointer">

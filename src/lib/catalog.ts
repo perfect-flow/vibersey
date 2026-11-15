@@ -24,7 +24,6 @@ export type SportStandard = {
   // what goes where, by sport convention
   layout: Partial<Record<Placement, {
     wordmark?: LayoutBox;
-    logo?: LayoutBox;
     number?: LayoutBox;
     name?: LayoutBox;
   }>>;
@@ -46,7 +45,6 @@ export const STANDARDS: Record<Sport, SportStandard> = {
         name: { x: 0.5, y: 0.2, h: 0.045, w: 0.6 },
         number: { x: 0.5, y: 0.38, h: 0.22 },
       },
-      sleeve_left: { logo: { x: 0.5, y: 0.45, h: 0.3 } },
     },
     numbersDefault: { front: true, back: true, sleeves: false },
     nameDefault: true,
@@ -92,7 +90,7 @@ export const STANDARDS: Record<Sport, SportStandard> = {
   hockey: {
     label: "Hockey",
     layout: {
-      front: { logo: { x: 0.5, y: 0.42, h: 0.3, w: 0.6 } },
+      front: {},
       back: {
         name: { x: 0.5, y: 0.18, h: 0.045, w: 0.6 },
         number: { x: 0.5, y: 0.4, h: 0.24 },
@@ -109,7 +107,6 @@ export const STANDARDS: Record<Sport, SportStandard> = {
     label: "Soccer",
     layout: {
       front: {
-        logo: { x: 0.66, y: 0.25, h: 0.09 },
         wordmark: { x: 0.5, y: 0.42, h: 0.06, w: 0.55 },
         number: { x: 0.34, y: 0.27, h: 0.06 },
       },
@@ -123,6 +120,29 @@ export const STANDARDS: Record<Sport, SportStandard> = {
     guidance:
       "Soccer: club crest on the left chest (wearer's left, which is the viewer's right), a centered sponsor or team wordmark across the chest, optional small number on the right chest. Back: player name above a large number. Modern kits use bold graphic patterns, gradients, or subtle tonal textures.",
   },
+};
+
+// Where a team logo can go. Boxes are normalized to the panel like LayoutBox.
+// "left_chest" is the wearer's left, which is the viewer's right.
+export const LOGO_POSITIONS = ["auto", "above_name", "center_chest", "left_chest", "right_chest", "sleeves", "upper_back"] as const;
+export type LogoPosition = (typeof LOGO_POSITIONS)[number];
+
+export const LOGO_SPOTS: Record<Exclude<LogoPosition, "auto">, Partial<Record<Placement, LayoutBox>> & { anchorTop?: boolean }> = {
+  above_name: { front: { x: 0.5, y: 0.155, h: 0.11, w: 0.3 }, anchorTop: true },
+  center_chest: { front: { x: 0.5, y: 0.36, h: 0.26, w: 0.62 } },
+  left_chest: { front: { x: 0.67, y: 0.24, h: 0.13, w: 0.26 } },
+  right_chest: { front: { x: 0.33, y: 0.24, h: 0.13, w: 0.26 } },
+  sleeves: { sleeve_left: { x: 0.5, y: 0.4, h: 0.32, w: 0.7 }, sleeve_right: { x: 0.5, y: 0.4, h: 0.32, w: 0.7 } },
+  upper_back: { back: { x: 0.5, y: 0.08, h: 0.07, w: 0.3 } },
+};
+
+// The sport's usual logo spot, used when the position is "auto".
+export const DEFAULT_LOGO_POSITION: Record<Sport, Exclude<LogoPosition, "auto">> = {
+  baseball: "above_name",
+  basketball: "above_name",
+  football: "above_name",
+  hockey: "center_chest",
+  soccer: "left_chest",
 };
 
 export type ProductKey =

@@ -56,7 +56,11 @@ export function JerseyPreview({
   className?: string;
 }) {
   const uid = useId().replace(/:/g, "");
-  const shape = shapeFor(spec);
+  const base = shapeFor(spec);
+  // The back neckline sits much higher than the front scoop, so the body (and
+  // its print) runs right up to the collar instead of leaving a gap.
+  const backNeck = (d: string) => d.replace(/Q300 \d+/, "Q300 70");
+  const shape: Shape = view === "back" ? { ...base, body: backNeck(base.body), collar: backNeck(base.collar) } : base;
   // Sleeves render at their own aspect ratio so sleeve numbers aren't cropped.
   const panels = useMemo(() => {
     const make = (pl: Placement, w: number, h: number, fit?: { dx: number; scale: number }) => ({
@@ -122,7 +126,7 @@ export function JerseyPreview({
       <g fill="none" stroke="#000" strokeOpacity="0.35" strokeWidth="2" strokeLinejoin="round">
         <path d={shape.body} />
         {shape.sleeves?.map((d) => <path key={d} d={d} />)}
-        <path d={view === "front" ? shape.collar : shape.collar.replace(/Q300 \d+/, "Q300 70")} strokeWidth="6" stroke={spec.colors.accent} strokeOpacity="1" />
+        <path d={shape.collar} strokeWidth="6" stroke={spec.colors.accent} strokeOpacity="1" />
       </g>
     </svg>
   );
