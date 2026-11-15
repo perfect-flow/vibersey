@@ -21,6 +21,7 @@ Design a custom sports jersey by chatting with AI, then have Printful print and 
 3. **Catalog sync:** after deploying, pull products, sizes, costs and print-file sizes from Printful:
    ```sh
    curl -X POST -H "Authorization: Bearer $ADMIN_SECRET" https://<your-domain>/api/admin/sync-catalog
+   # or open https://<your-domain>/api/admin/sync-catalog?secret=<ADMIN_SECRET> in a browser
    ```
    The response lists each product and flags any whose placements didn't match. Re-run whenever Printful prices change.
 4. **Stripe webhook:** add an endpoint for `https://<your-domain>/api/stripe/webhook` with the `checkout.session.completed` event and put its signing secret in `STRIPE_WEBHOOK_SECRET`.
