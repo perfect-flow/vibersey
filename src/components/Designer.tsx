@@ -74,7 +74,11 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
     );
   }, [initialDesignId]);
 
-  useEffect(() => chatEnd.current?.scrollIntoView({ behavior: "smooth" }), [messages, busy]);
+  // Braces matter: newer browsers return a Promise from scrollIntoView, and React
+  // treats any returned value as a cleanup function, which crashes the page.
+  useEffect(() => {
+    chatEnd.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, busy]);
 
   // Save manual tweaks (debounced). These don't use up free generations.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
