@@ -5,7 +5,7 @@
 // The artwork, colors and fonts come from the saved DesignSpec; only the
 // player's name and number vary between team members.
 
-import { STANDARDS, productByKey, type LayoutBox, type Placement } from "./catalog";
+import { STANDARDS, LOGO_SPOTS, DEFAULT_LOGO_POSITION, productByKey, type LayoutBox, type Placement } from "./catalog";
 import { FONTS, type DesignSpec, type Player } from "./design-spec";
 
 export type RenderOptions = {
@@ -28,6 +28,8 @@ const esc = (s: string) =>
 // rough average glyph width/height ratio per font, used to keep text inside its box
 const WIDTH_RATIO: Record<string, number> = {
   graduate: 0.78, bebas: 0.42, oswald: 0.5, anton: 0.48, teko: 0.42, yellowtail: 0.55, blackops: 0.75,
+  alfaslab: 0.8, bowlby: 0.85, bungee: 0.8, russo: 0.72, staatliches: 0.5, squada: 0.5, racing: 0.62,
+  kanit: 0.66, rubikmono: 1.0, marker: 0.62, pacifico: 0.6,
 };
 const CAP_RATIO = 0.72; // cap height as a fraction of font-size
 
@@ -62,7 +64,7 @@ function textEl(opts: {
   const sw = size * outline * 2;
   const common = `font-family="${f.family}" font-size="${size.toFixed(1)}"${
     "weight" in f ? ` font-weight="${f.weight}"` : ""
-  } fill="${fill}" stroke="${stroke}" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round" paint-order="stroke" text-anchor="middle"`;
+  }${"italic" in f ? ` font-style="italic"` : ""} fill="${fill}" stroke="${stroke}" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round" paint-order="stroke" text-anchor="middle"`;
   if (!arch) {
     return `<text x="${cx.toFixed(1)}" y="${baseline.toFixed(1)}" ${common}>${esc(text)}</text>`;
   }
@@ -126,6 +128,22 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
   return parts.join("");
 }
 
+// The logo's box on this panel, scaled by the customer's size choice and kept
+// inside the panel. Older saved designs have no position/scale, hence the defaults.
+function logoBox(spec: DesignSpec, placement: Placement): LayoutBox | undefined {
+  const pos = !spec.logo.position || spec.logo.position === "auto" ? DEFAULT_LOGO_POSITION[spec.sport] : spec.logo.position;
+  const spot = LOGO_SPOTS[pos];
+  const base = spot[placement];
+  if (!base) return undefined;
+  const k = spec.logo.scale ?? 1;
+  const h = Math.min(base.h * k, 0.9);
+  const w = base.w ? Math.min(base.w * k, 0.95) : undefined;
+  const half = (w ?? h) / 2;
+  // spots above the team name grow downward from their top edge so they stay clear of the collar
+  const y = spot.anchorTop ? base.y - base.h / 2 + h / 2 : base.y;
+  return { x: Math.min(Math.max(base.x, half), 1 - half), y: Math.min(Math.max(y, h / 2), 1 - h / 2), h, w };
+}
+
 // Panel content without the outer <svg>, so previews can nest several panels.
 export function renderPanelInner(spec: DesignSpec, placement: Placement, o: RenderOptions): string {
   const { width: W, height: H } = o;
@@ -134,7 +152,7 @@ export function renderPanelInner(spec: DesignSpec, placement: Placement, o: Rend
   const fit = o.fit;
   const adj = (b?: LayoutBox): LayoutBox | undefined =>
     b && fit ? { x: b.x + fit.dx, y: b.y, h: b.h * fit.scale, w: b.w ? b.w * fit.scale : undefined } : b;
-  const layout = { wordmark: adj(raw.wordmark), logo: adj(raw.logo), number: adj(raw.number), name: adj(raw.name) };
+  const layout = { wordmark: adj(raw.wordmark), logo: adj(logoBox(spec, placement)), number: adj(raw.number), name: adj(raw.name) };
   const L = spec.lettering;
   const isSleeve = placement === "sleeve_left" || placement === "sleeve_right";
   const els: string[] = [background(spec, placement, W, H, o.resolveImage, o.idPrefix ?? "")];
