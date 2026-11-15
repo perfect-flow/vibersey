@@ -5,7 +5,7 @@ import { Header } from "@/components/Header";
 export const metadata: Metadata = {
   title: "Vibersey · Design your jersey with AI",
   description:
-    "Chat with AI to design a custom baseball, basketball, football, hockey, soccer or golf jersey. Printed and shipped on demand, for one player or the whole team.",
+    "Chat with AI to design a custom baseball, basketball, football, hockey or soccer jersey. Printed and shipped on demand, for one player or the whole team.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
