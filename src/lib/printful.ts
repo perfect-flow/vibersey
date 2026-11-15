@@ -5,12 +5,26 @@ import { supabaseAdmin } from "./supabase/admin";
 
 const BASE = "https://api.printful.com";
 
+let storeIdCache: string | null = null;
+
+// Account-level tokens need a store id on most endpoints. Use PRINTFUL_STORE_ID
+// when set, otherwise the first store on the account.
+async function storeId(): Promise<string | null> {
+  if (env.printfulStoreId()) return env.printfulStoreId()!;
+  if (storeIdCache) return storeIdCache;
+  const res = await fetch(`${BASE}/stores`, { headers: { Authorization: `Bearer ${env.printfulToken()}` }, cache: "no-store" });
+  if (!res.ok) return null; // store-level tokens can't list stores and don't need an id
+  const stores = ((await res.json()).result ?? []) as { id: number; name: string }[];
+  storeIdCache = stores[0] ? String(stores[0].id) : null;
+  return storeIdCache;
+}
+
 async function pf<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${env.printfulToken()}`,
     "Content-Type": "application/json",
   };
-  const store = env.printfulStoreId();
+  const store = await storeId();
   if (store) headers["X-PF-Store-Id"] = store;
   const res = await fetch(`${BASE}${path}`, { ...init, headers: { ...headers, ...(init.headers as object) }, cache: "no-store" });
   const body = await res.json().catch(() => ({}));
