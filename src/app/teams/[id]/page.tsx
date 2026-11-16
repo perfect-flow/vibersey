@@ -3,6 +3,8 @@
 import { use, useEffect, useMemo, useState } from "react";
 import Papa from "papaparse";
 import { JerseyPreview } from "@/components/JerseyPreview";
+import { ModelPreviewButton } from "@/components/ModelPreview";
+import { COLOR_KEYS, COLOR_LABELS, COLORWAY_PRESETS, applyColors, colorway, type Colors, type ColorwayPreset } from "@/lib/colorways";
 import { productByKey } from "@/lib/catalog";
 import type { DesignSpec } from "@/lib/design-spec";
 import { fmt } from "@/lib/pricing";
@@ -18,12 +20,19 @@ type Entry = {
   order_id: string | null;
 };
 type Team = { id: string; name: string; share_slug: string; share_enabled: boolean };
+type Kit = { id: string | null; label: string; design_id: string; spec: DesignSpec };
+type KitDraft = { preset: ColorwayPreset | "custom"; label: string; colors: Colors };
+const PRESET_NAMES: Record<ColorwayPreset | "custom", string> = { white: "Away", dark: "Alternate", swap: "Third", custom: "Alternate" };
 type NewEntry = { player_name: string; number: string; size: string; quantity: number; email?: string | null };
 
 export default function TeamPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [team, setTeam] = useState<Team | null>(null);
   const [spec, setSpec] = useState<DesignSpec | null>(null);
+  const [kits, setKits] = useState<Kit[]>([]);
+  const [activeKit, setActiveKit] = useState(0);
+  const [orderKits, setOrderKits] = useState<string[]>([]); // design ids to order
+  const [kitDraft, setKitDraft] = useState<KitDraft | null>(null);
   const [roster, setRoster] = useState<Entry[]>([]);
   const [sizes, setSizes] = useState<{ size: string; price: number }[]>([]);
   const [draft, setDraft] = useState<NewEntry>({ player_name: "", number: "", size: "", quantity: 1 });
@@ -38,6 +47,9 @@ export default function TeamPage({ params }: { params: Promise<{ id: string }> }
       const d = await r.json();
       setTeam(d.team);
       setSpec(d.design.spec);
+      const k: Kit[] = d.kits?.length ? d.kits : [{ id: null, label: "Home", design_id: d.design.id, spec: d.design.spec }];
+      setKits(k);
+      setOrderKits([k[0].design_id]);
       setRoster(d.roster);
       const prods = (await (await fetch("/api/products")).json()).products as { key: string; sizes: { size: string; price: number }[] }[];
       const def = productByKey(d.design.spec.product);
@@ -47,7 +59,42 @@ export default function TeamPage({ params }: { params: Promise<{ id: string }> }
 
   const priceOf = (size: string) => sizes.find((s) => s.size.toUpperCase() === size.toUpperCase())?.price ?? 0;
   const open = roster.filter((e) => !e.order_id);
-  const total = useMemo(() => open.reduce((s, e) => s + priceOf(e.size) * e.quantity, 0), [open, sizes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const kitCount = Math.max(1, orderKits.length);
+  const total = useMemo(() => open.reduce((s, e) => s + priceOf(e.size) * e.quantity, 0) * kitCount, [open, sizes, kitCount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function startKit(preset: ColorwayPreset | "custom") {
+    if (!spec) return;
+    const used = new Set(kits.map((k) => k.label.toLowerCase()));
+    let label = PRESET_NAMES[preset];
+    for (let n = 2; used.has(label.toLowerCase()); n++) label = `${PRESET_NAMES[preset]} ${n}`;
+    setKitDraft({ preset, label, colors: preset === "custom" ? { ...spec.colors } : colorway(spec.colors, preset) });
+  }
+
+  async function saveKit() {
+    if (!kitDraft) return;
+    setBusy(true);
+    const r = await fetch(`/api/teams/${id}/kits`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: kitDraft.label, colors: kitDraft.colors }),
+    });
+    const d = await r.json();
+    setBusy(false);
+    if (!r.ok) return setMsg(d.error);
+    setKits((k) => [...k, d.kit]);
+    setActiveKit(kits.length);
+    setKitDraft(null);
+    setMsg(`${d.kit.label} kit added. Pick which kits to order below.`);
+  }
+
+  async function removeKit(kit: Kit) {
+    if (!kit.id) return;
+    const r = await fetch(`/api/teams/${id}/kits?kitId=${kit.id}`, { method: "DELETE" });
+    if (!r.ok) return setMsg("Couldn't remove that kit.");
+    setKits((k) => k.filter((x) => x.design_id !== kit.design_id));
+    setOrderKits((o) => o.filter((x) => x !== kit.design_id));
+    setActiveKit(0);
+  }
   const shareUrl = team ? `${typeof window !== "undefined" ? window.location.origin : ""}/t/${team.share_slug}` : "";
 
   async function add(entries: NewEntry[], source: "manual" | "csv") {
@@ -104,7 +151,7 @@ export default function TeamPage({ params }: { params: Promise<{ id: string }> }
     const r = await fetch("/api/checkout", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "team", teamId: id }),
+      body: JSON.stringify({ mode: "team", teamId: id, kitDesignIds: orderKits }),
     });
     const d = await r.json();
     setBusy(false);
@@ -114,20 +161,105 @@ export default function TeamPage({ params }: { params: Promise<{ id: string }> }
 
   if (!team || !spec) return <div className="p-10 text-center text-muted">{msg ?? "Loading team…"}</div>;
   const unknownSizes = open.filter((e) => !priceOf(e.size));
+  const shownSpec = kitDraft ? applyColors(spec, kitDraft.colors) : (kits[activeKit]?.spec ?? spec);
 
   return (
     <section className="mx-auto grid max-w-7xl gap-6 px-4 py-8 lg:grid-cols-[380px_1fr]">
       <div className="space-y-4">
         <div>
           <h1 className="font-display text-5xl tracking-wide">{team.name}</h1>
-          <p className="text-sm text-muted">Every jersey uses this exact design and fonts. Only the name and number change.</p>
+          <p className="text-sm text-muted">Every jersey uses this exact design and fonts. Only the name and number change, and extra kits change only the colors.</p>
         </div>
         <div className="card p-4">
-          <JerseyPreview spec={spec} player={selected ?? spec.sample} view={view} className="mx-auto h-80" />
+          <JerseyPreview spec={shownSpec} player={selected ?? spec.sample} view={view} className="mx-auto h-80" />
           <div className="mt-2 flex justify-center gap-3 text-xs text-muted">
             <button className={view === "front" ? "text-volt" : ""} onClick={() => setView("front")}>Front</button>
             <button className={view === "back" ? "text-volt" : ""} onClick={() => setView("back")}>Back</button>
           </div>
+          {!kitDraft && kits[activeKit] && (
+            <div className="mt-3 text-center">
+              <ModelPreviewButton
+                key={kits[activeKit].design_id}
+                getDesignId={async () => kits[activeKit].design_id}
+                player={selected ?? spec.sample}
+                label={`See ${kits[activeKit].label} on a model`}
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="card space-y-3 p-4">
+          <div>
+            <span className="font-semibold">Kits</span>
+            <p className="text-xs text-muted">Same design, players, names and numbers in different colors, like home and away.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {kits.map((k, i) => (
+              <span key={k.design_id} className={`flex items-center gap-1 rounded-full border px-3 py-1 text-sm ${i === activeKit && !kitDraft ? "border-[var(--color-volt)]" : "border-line"}`}>
+                <button
+                  onClick={() => {
+                    setKitDraft(null);
+                    setActiveKit(i);
+                  }}
+                  className="flex items-center gap-1"
+                >
+                  <span className="h-3 w-3 rounded-full border border-white/30" style={{ background: k.spec.colors.primary }} />
+                  {k.label}
+                </button>
+                {k.id && (
+                  <button onClick={() => removeKit(k)} className="text-xs text-muted hover:text-red-400" aria-label={`Remove ${k.label} kit`}>
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+          </div>
+          {!kitDraft ? (
+            kits.length < 6 && (
+              <div>
+                <span className="label">Add a kit</span>
+                <div className="flex flex-wrap gap-2">
+                  {(Object.keys(COLORWAY_PRESETS) as ColorwayPreset[]).map((p) => (
+                    <button key={p} className="btn-ghost text-sm" title={COLORWAY_PRESETS[p].hint} onClick={() => startKit(p)}>
+                      {COLORWAY_PRESETS[p].label}
+                    </button>
+                  ))}
+                  <button className="btn-ghost text-sm" onClick={() => startKit("custom")}>
+                    Custom colors
+                  </button>
+                </div>
+              </div>
+            )
+          ) : (
+            <div className="space-y-3 rounded border border-line p-3">
+              <div>
+                <span className="label">Kit name</span>
+                <input className="input" maxLength={30} value={kitDraft.label} onChange={(e) => setKitDraft({ ...kitDraft, label: e.target.value })} />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {COLOR_KEYS.map((c) => (
+                  <label key={c} className="flex items-center gap-2 text-xs text-muted">
+                    <input
+                      type="color"
+                      value={kitDraft.colors[c]}
+                      onChange={(e) => setKitDraft({ ...kitDraft, preset: "custom", colors: { ...kitDraft.colors, [c]: e.target.value.toUpperCase() } })}
+                      className="h-8 w-10 cursor-pointer rounded border border-line bg-transparent"
+                    />
+                    {COLOR_LABELS[c]}
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-muted">The layout, graphics, fonts and logo stay locked. Only these colors change.</p>
+              <div className="flex gap-2">
+                <button className="btn-primary" disabled={busy || !kitDraft.label.trim()} onClick={saveKit}>
+                  Save kit
+                </button>
+                <button className="btn-ghost" onClick={() => setKitDraft(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         <div className="card space-y-2 p-4">
           <div className="flex items-center justify-between">
@@ -234,15 +366,32 @@ export default function TeamPage({ params }: { params: Promise<{ id: string }> }
         <div className="card flex flex-wrap items-center justify-between gap-3 p-4">
           <div>
             <div className="font-semibold">
-              {open.length} jersey{open.length === 1 ? "" : "s"} not yet ordered
+              {open.length} player{open.length === 1 ? "" : "s"} not yet ordered
+              {kitCount > 1 && ` · ${open.length * kitCount} jerseys (${kitCount} kits each)`}
             </div>
+            {kits.length > 1 && (
+              <div className="my-2 flex flex-wrap gap-3 text-sm">
+                {kits.map((k) => (
+                  <label key={k.design_id} className="flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={orderKits.includes(k.design_id)}
+                      onChange={(e) =>
+                        setOrderKits((o) => (e.target.checked ? [...o, k.design_id] : o.filter((x) => x !== k.design_id)))
+                      }
+                    />
+                    {k.label}
+                  </label>
+                ))}
+              </div>
+            )}
             <div className="text-xs text-muted">
               {unknownSizes.length ? `${unknownSizes.length} player(s) have a size we don't offer. Fix them before ordering.` : "Plus shipping at checkout."}
             </div>
           </div>
           <div className="flex items-center gap-3">
             <span className="font-display text-4xl text-volt">{fmt(total)}</span>
-            <button className="btn-primary" onClick={orderAll} disabled={busy || !open.length || unknownSizes.length > 0}>
+            <button className="btn-primary" onClick={orderAll} disabled={busy || !open.length || !orderKits.length || unknownSizes.length > 0}>
               Order for the team
             </button>
           </div>

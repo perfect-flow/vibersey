@@ -40,8 +40,13 @@ export async function POST(req: Request) {
 
       // link roster entries to this order (and create ones from share-link orders)
       const items = order.items as OrderItem[];
+      // one roster entry per player even when they bought several kits
+      const created = new Map<string, string | null>();
       for (const item of items) {
-        if (item.new_roster_entry) {
+        const who = `${item.name}|${item.number}|${item.size}|${item.quantity}`;
+        if (item.new_roster_entry && created.has(who)) {
+          item.roster_entry_id = created.get(who) ?? null;
+        } else if (item.new_roster_entry) {
           const { data: entry } = await db
             .from("roster_entries")
             .insert({
@@ -57,6 +62,7 @@ export async function POST(req: Request) {
             .select("id")
             .single();
           item.roster_entry_id = entry?.id ?? null;
+          created.set(who, item.roster_entry_id ?? null);
         } else if (item.roster_entry_id) {
           await db.from("roster_entries").update({ order_id: orderId }).eq("id", item.roster_entry_id);
         }

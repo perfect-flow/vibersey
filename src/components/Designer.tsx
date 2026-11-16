@@ -17,6 +17,7 @@ import { FONTS, defaultSpec, type DesignSpec, type FontKey } from "@/lib/design-
 import { fmt } from "@/lib/pricing";
 import { prepareImage } from "@/lib/client-image";
 import { JerseyPreview } from "./JerseyPreview";
+import { ModelPreviewButton } from "./ModelPreview";
 import { SignupModal } from "./AuthForm";
 
 type Msg = { role: "user" | "assistant"; content: string };
@@ -412,6 +413,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
             <button className={view === "front" ? "text-volt" : ""} onClick={() => setView("front")}>Front</button>·
             <button className={view === "back" ? "text-volt" : ""} onClick={() => setView("back")}>Back</button>
           </div>
+          <ModelPreviewButton className="btn-ghost mt-3" getDesignId={() => ensureDesign()} spec={spec} player={player} />
         </div>
 
         {notice && <p className="text-sm text-volt">{notice}</p>}
