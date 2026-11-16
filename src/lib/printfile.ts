@@ -34,21 +34,28 @@ export function renderPng(svg: string) {
   return r.render().asPng();
 }
 
-// Render every print panel for one player and upload them. Returns the file
-// list in the shape Printful's order API expects.
-export async function buildPrintFiles(spec: DesignSpec, player: Player, product: ProductRow | null) {
+// Render every print panel for one player. scale < 1 renders smaller files
+// (for mockup previews); dims always report the real print-file size.
+export async function renderPanels(spec: DesignSpec, player: Player, product: ProductRow | null, scale = 1) {
   const images = await inlineImages(spec);
-  const files: { type: Placement; url: string }[] = [];
-  for (const placement of placementsFor(spec)) {
+  return placementsFor(spec).map((placement) => {
     const dims = product?.printfiles?.[placement] ?? DEFAULT_PRINTFILE;
     const svg = renderPanelSVG(spec, placement, {
-      width: dims.width,
-      height: dims.height,
+      width: Math.round(dims.width * scale),
+      height: Math.round(dims.height * scale),
       player,
       resolveImage: (u) => images.get(u),
     });
-    const png = renderPng(svg);
-    files.push({ type: placement, url: await uploadPublic("printfiles", Buffer.from(png), "image/png", `${spec.sport}/`) });
+    return { placement, dims, png: Buffer.from(renderPng(svg)) };
+  });
+}
+
+// Render every print panel for one player and upload them. Returns the file
+// list in the shape Printful's order API expects.
+export async function buildPrintFiles(spec: DesignSpec, player: Player, product: ProductRow | null) {
+  const files: { type: Placement; url: string }[] = [];
+  for (const panel of await renderPanels(spec, player, product)) {
+    files.push({ type: panel.placement, url: await uploadPublic("printfiles", panel.png, "image/png", `${spec.sport}/`) });
   }
   return files;
 }

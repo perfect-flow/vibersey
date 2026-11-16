@@ -33,3 +33,21 @@ export async function getTeamBySlug(slug: string) {
   const design = await getDesign(team.design_id);
   return design ? { team, design } : null;
 }
+
+export type Kit = { id: string | null; label: string; design_id: string; spec: import("./design-spec").DesignSpec };
+
+// The team's kits: its own design ("Home") first, then any extra colorways.
+// Works before the team_kits migration has run (only Home is returned).
+export async function getKits(team: { id: string; design_id: string }): Promise<Kit[]> {
+  const db = supabaseAdmin();
+  const base = await getDesign(team.design_id);
+  const kits: Kit[] = base ? [{ id: null, label: "Home", design_id: base.id, spec: base.spec }] : [];
+  const { data, error } = await db.from("team_kits").select("id, label, design_id").eq("team_id", team.id).order("created_at");
+  if (error || !data?.length) return kits;
+  const { data: designs } = await db.from("designs").select("id, spec").in("id", data.map((k) => k.design_id));
+  for (const k of data) {
+    const d = designs?.find((x) => x.id === k.design_id);
+    if (d) kits.push({ id: k.id, label: k.label, design_id: k.design_id, spec: d.spec });
+  }
+  return kits;
+}

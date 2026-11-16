@@ -19,7 +19,7 @@ async function storeId(): Promise<string | null> {
   return storeIdCache;
 }
 
-async function pf<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
+export async function pf<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${env.printfulToken()}`,
     "Content-Type": "application/json",

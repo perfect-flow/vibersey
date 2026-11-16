@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getActor } from "@/lib/usage";
 import { getDesign, canEdit } from "@/lib/designs";
 import { getOrderableProducts } from "@/lib/printful";
-import { getTeamBySlug, getTeamForOwner, RosterEntryInput, cleanEntry } from "@/lib/teams";
+import { getKits, getTeamBySlug, getTeamForOwner, RosterEntryInput, cleanEntry } from "@/lib/teams";
 import { priceCents, variantForSize } from "@/lib/pricing";
 import { cleanPlayer } from "@/lib/design-spec";
 import { STANDARDS } from "@/lib/catalog";
@@ -25,9 +25,20 @@ const Body = z.discriminatedUnion("mode", [
   // a customer buying their own design
   z.object({ mode: z.literal("design"), designId: z.string().uuid(), lines: z.array(Line).min(1).max(50) }),
   // a manager buying the whole roster (or selected players)
-  z.object({ mode: z.literal("team"), teamId: z.string().uuid(), entryIds: z.array(z.string().uuid()).optional() }),
+  // kitDesignIds: which kits (home, away...) each player gets; default home only
+  z.object({
+    mode: z.literal("team"),
+    teamId: z.string().uuid(),
+    entryIds: z.array(z.string().uuid()).optional(),
+    kitDesignIds: z.array(z.string().uuid()).min(1).max(6).optional(),
+  }),
   // a team member ordering through the share link
-  z.object({ mode: z.literal("member"), slug: z.string().min(4), entry: RosterEntryInput }),
+  z.object({
+    mode: z.literal("member"),
+    slug: z.string().min(4),
+    entry: RosterEntryInput,
+    kitDesignIds: z.array(z.string().uuid()).min(1).max(6).optional(),
+  }),
 ]);
 
 const COUNTRIES = ["US", "CA", "GB", "AU", "NZ", "IE", "DE", "FR", "ES", "IT", "NL", "BE", "SE", "DK", "NO", "FI", "AT", "CH", "PT", "PL", "MX", "JP"] as const;
@@ -40,6 +51,8 @@ export async function POST(req: Request) {
   const db = supabaseAdmin();
 
   let designId: string;
+  // the kits to make for every line: [{ design_id, label }]; one entry outside teams
+  let kits: { design_id: string; label: string | null }[] = [];
   let teamId: string | null = null;
   let cancelPath = "/";
   let pending: Omit<OrderItem, "variant_id" | "unit_price_cents" | "unit_cost_cents" | "sport" | "design_id" | "product_key">[] = [];
@@ -56,6 +69,8 @@ export async function POST(req: Request) {
     designId = team.design_id;
     teamId = team.id;
     cancelPath = `/teams/${team.id}`;
+    kits = await pickKits(team, body.kitDesignIds);
+    if (!kits.length) return NextResponse.json({ error: "Pick at least one kit" }, { status: 400 });
     let q = db.from("roster_entries").select("*").eq("team_id", team.id).is("order_id", null);
     if (body.entryIds?.length) q = q.in("id", body.entryIds);
     const { data: entries } = await q;
@@ -72,6 +87,8 @@ export async function POST(req: Request) {
     designId = found.design.id;
     teamId = found.team.id;
     cancelPath = `/t/${body.slug}`;
+    kits = await pickKits(found.team, body.kitDesignIds);
+    if (!kits.length) return NextResponse.json({ error: "Pick at least one kit" }, { status: 400 });
     const e = cleanEntry(body.entry);
     pending = [
       {
@@ -84,6 +101,7 @@ export async function POST(req: Request) {
   }
 
   const design = (await getDesign(designId))!;
+  if (!kits.length) kits = [{ design_id: design.id, label: null }];
   const products = await getOrderableProducts(design.spec.product);
   if (!products.some((p) => p.variants?.length))
     return NextResponse.json({ error: "This jersey isn't available yet. Please try again soon." }, { status: 503 });
@@ -100,16 +118,18 @@ export async function POST(req: Request) {
       }
     }
     if (!v) return NextResponse.json({ error: `Size ${p.size} isn't available for this jersey` }, { status: 400 });
-    items.push({
-      ...p,
-      design_id: design.id,
-      sport: design.sport,
-      product_key: productKey,
-      variant_id: v.id,
-      size: v.size,
-      unit_cost_cents: v.cost,
-      unit_price_cents: priceCents(v.cost),
-    });
+    for (const kit of kits)
+      items.push({
+        ...p,
+        design_id: kit.design_id,
+        kit: kit.label,
+        sport: design.sport,
+        product_key: productKey,
+        variant_id: v.id,
+        size: v.size,
+        unit_cost_cents: v.cost,
+        unit_price_cents: priceCents(v.cost),
+      });
   }
   const subtotal = items.reduce((s, i) => s + i.unit_price_cents * i.quantity, 0);
   const shipping = env.shippingCents();
@@ -138,7 +158,7 @@ export async function POST(req: Request) {
         currency: "usd",
         unit_amount: i.unit_price_cents,
         product_data: {
-          name: `${design.title} · ${STANDARDS[design.sport].label} jersey`,
+          name: `${design.title.replace(/ \(team template\)$/, "")}${i.kit ? ` ${i.kit}` : ""} · ${STANDARDS[design.sport].label} jersey`,
           description: [`Size ${i.size}`, i.name, i.number && `#${i.number}`].filter(Boolean).join(" · "),
         },
       },
@@ -161,4 +181,12 @@ export async function POST(req: Request) {
 
   await db.from("orders").update({ stripe_session_id: session.id }).eq("id", order.id);
   return NextResponse.json({ url: session.url });
+}
+
+// Only kits that belong to this team; all kits share the same product, so
+// sizes and prices are identical.
+async function pickKits(team: { id: string; design_id: string }, wanted?: string[]) {
+  const all = await getKits(team);
+  const ids = wanted?.length ? wanted : [team.design_id];
+  return all.filter((k) => ids.includes(k.design_id)).map((k) => ({ design_id: k.design_id, label: k.label }));
 }

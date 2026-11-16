@@ -15,7 +15,9 @@ const LOGO_POSITION_LABELS: Record<LogoPosition, string> = {
 };
 import { FONTS, defaultSpec, type DesignSpec, type FontKey } from "@/lib/design-spec";
 import { fmt } from "@/lib/pricing";
+import { prepareImage } from "@/lib/client-image";
 import { JerseyPreview } from "./JerseyPreview";
+import { ModelPreviewButton } from "./ModelPreview";
 import { SignupModal } from "./AuthForm";
 
 type Msg = { role: "user" | "assistant"; content: string };
@@ -57,7 +59,10 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
   const [view, setView] = useState<"front" | "back">("front");
   const [catalog, setCatalog] = useState<CatalogProduct[]>([]);
   const [signup, setSignup] = useState<string | null>(null);
-  const [inspiration, setInspiration] = useState<string | null>(null);
+  // an image attached in chat: either the customer's logo (already placed on
+  // the jersey) or inspiration for the AI
+  const [attachment, setAttachment] = useState<{ url: string; file: File; asLogo: boolean; prevLogo: DesignSpec["logo"] | null } | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [size, setSize] = useState("");
   const [qty, setQty] = useState(1);
@@ -141,6 +146,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
 
   async function send(text: string) {
     if (!spec || !text.trim() || busy) return;
+    if (uploading) return setNotice("Hang on, your image is still uploading.");
     if (locked) return setNotice("This is a locked team template. Duplicate it from My designs to keep designing.");
     setMessages((m) => [...m, { role: "user", content: text }]);
     setInput("");
@@ -161,7 +167,8 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
         product: spec.product,
         spec,
         message: text,
-        inspirationImage: inspiration,
+        inspirationImage: attachment?.url ?? null,
+        attachmentIsLogo: attachment?.asLogo ?? false,
       }),
     });
     setBusy(false);
@@ -181,36 +188,101 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
       setMessages((m) => [...m, { role: "assistant", content: data.error ?? "Something went wrong. Please try again." }]);
       return;
     }
-    setInspiration(null);
+    setAttachment(null);
     setSpec(data.spec);
     setTitle(data.title);
     setMessages((m) => [...m, { role: "assistant", content: data.reply }]);
   }
 
-  async function upload(file: File, kind: "logo" | "inspiration") {
-    if (locked) return setNotice("This is a locked team template. Duplicate it from My designs to keep designing.");
-    setNotice(kind === "logo" ? "Uploading logo…" : "Uploading image…");
-    const form = new FormData();
-    form.append("file", file);
-    form.append("kind", kind);
+  // Shrink (keeping transparency) and upload one image. Returns its public URL.
+  async function uploadImage(file: File, kind: "logo" | "inspiration"): Promise<string | null> {
+    let body: FormData;
+    try {
+      const prepared = await prepareImage(file);
+      body = new FormData();
+      body.append("file", prepared.file, prepared.name);
+      body.append("kind", kind);
+    } catch (e) {
+      setNotice((e as Error).message);
+      return null;
+    }
     let data: { url?: string; error?: string } = {};
     let ok = false;
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const res = await fetch("/api/upload", { method: "POST", body });
       ok = res.ok;
       data = await res.json().catch(() => ({}));
+      if (res.status === 413) data.error = "That image is too large. Try one under 4 MB.";
     } catch {
       // network error, handled below
     }
-    if (!ok || !data.url) return setNotice(data.error ?? "Upload failed. Please try again.");
-    setNotice(kind === "logo" ? null : "Image attached. Send a message to use it as inspiration.");
-    if (kind !== "logo" || !spec) return setInspiration(data.url);
-    // Apply and save right away (not debounced) so the logo survives a refresh
-    // or an immediate chat message.
-    const next: DesignSpec = { ...spec, logo: { ...spec.logo, url: data.url, source: "upload", prompt: null } };
+    if (!ok || !data.url) {
+      setNotice(data.error ?? "Upload failed. Please try again.");
+      return null;
+    }
+    return data.url;
+  }
+
+  // Put a logo on the jersey and save right away (not debounced) so it
+  // survives a refresh or an immediate chat message.
+  async function applyLogo(logo: DesignSpec["logo"]) {
+    if (!spec) return;
+    const next: DesignSpec = { ...spec, logo };
     setSpec(next);
     const id = await ensureDesign(next);
     if (id) await api(`/api/design/${id}`, { method: "PATCH", body: JSON.stringify({ spec: next }) });
+  }
+
+  async function uploadLogo(file: File): Promise<string | null> {
+    if (!spec) return null;
+    if (locked) {
+      setNotice("This is a locked team template. Duplicate it from My designs to keep designing.");
+      return null;
+    }
+    setUploading(true);
+    setNotice("Uploading logo…");
+    const url = await uploadImage(file, "logo");
+    if (url) {
+      await applyLogo({ ...spec.logo, url, source: "upload", prompt: null });
+      setNotice("Logo added. Use Logo size and Logo position below to adjust it.");
+    }
+    setUploading(false);
+    return url;
+  }
+
+  // The paperclip in chat. Logos (transparent images, or files named like a
+  // logo) go straight onto the jersey; anything else is inspiration. The chip
+  // lets the customer switch.
+  async function attach(file: File) {
+    if (!spec) return;
+    if (locked) return setNotice("This is a locked team template. Duplicate it from My designs to keep designing.");
+    const prevLogo = spec.logo;
+    const prepared = await prepareImage(file).catch(() => null);
+    const looksLikeLogo = !!prepared?.transparent || /logo|crest|badge|emblem/i.test(file.name);
+    if (looksLikeLogo) {
+      const url = await uploadLogo(file);
+      if (url) setAttachment({ url, file, asLogo: true, prevLogo });
+      return;
+    }
+    setUploading(true);
+    setNotice("Uploading image…");
+    const url = await uploadImage(file, "inspiration");
+    setUploading(false);
+    if (!url) return;
+    setNotice(null);
+    setAttachment({ url, file, asLogo: false, prevLogo });
+  }
+
+  async function switchAttachment(asLogo: boolean) {
+    if (!attachment || !spec) return;
+    if (asLogo) {
+      const url = await uploadLogo(attachment.file); // re-upload with the background removed
+      if (url) setAttachment({ ...attachment, url, asLogo: true, prevLogo: spec.logo });
+    } else {
+      if (attachment.prevLogo) await applyLogo(attachment.prevLogo);
+      setNotice(null);
+      setAttachment({ ...attachment, asLogo: false });
+    }
   }
 
   async function save() {
@@ -341,6 +413,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
             <button className={view === "front" ? "text-volt" : ""} onClick={() => setView("front")}>Front</button>·
             <button className={view === "back" ? "text-volt" : ""} onClick={() => setView("back")}>Back</button>
           </div>
+          <ModelPreviewButton className="btn-ghost mt-3" getDesignId={() => ensureDesign()} spec={spec} player={player} />
         </div>
 
         {notice && <p className="text-sm text-volt">{notice}</p>}
@@ -466,10 +539,31 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
           )}
           <div>
             <span className="label">Logo</span>
-            <label className="btn-ghost w-full cursor-pointer">
-              {spec.logo.url ? "Replace logo" : "Upload logo"}
-              <input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0], "logo")} />
-            </label>
+            <div className="flex items-center gap-2">
+              {spec.logo.url && (
+                // checkerboard so the customer can see the logo's transparency
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={spec.logo.url}
+                  alt="Current logo"
+                  className="h-10 w-10 shrink-0 rounded object-contain"
+                  style={{ background: "repeating-conic-gradient(#3a3a44 0% 25%, #23232b 0% 50%) 50% / 10px 10px" }}
+                />
+              )}
+              <label className={`btn-ghost w-full cursor-pointer ${uploading || busy ? "pointer-events-none opacity-50" : ""}`}>
+                {uploading ? "Uploading…" : spec.logo.url ? (spec.logo.source === "upload" ? "Replace logo" : "Upload your logo") : "Upload logo"}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = ""; // allow picking the same file again
+                    if (f) uploadLogo(f);
+                  }}
+                />
+              </label>
+            </div>
           </div>
         </div>
       </div>
@@ -510,19 +604,40 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
               send(input);
             }}
           >
-            {inspiration && (
+            {attachment && (
               <div className="mb-2 flex items-center gap-2 text-xs text-muted">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={inspiration} alt="" className="h-10 w-10 rounded object-cover" /> Inspiration attached
-                <button type="button" onClick={() => setInspiration(null)} className="underline">
+                <img
+                  src={attachment.url}
+                  alt=""
+                  className="h-10 w-10 rounded object-contain"
+                  style={{ background: "repeating-conic-gradient(#3a3a44 0% 25%, #23232b 0% 50%) 50% / 10px 10px" }}
+                />
+                <span>{attachment.asLogo ? "Added as your logo" : "Inspiration attached"}</span>
+                <button type="button" disabled={uploading} onClick={() => switchAttachment(!attachment.asLogo)} className="underline">
+                  {attachment.asLogo ? "use as inspiration instead" : "use as my logo"}
+                </button>
+                <button type="button" onClick={() => setAttachment(null)} className="ml-auto underline">
                   remove
                 </button>
               </div>
             )}
             <div className="flex gap-2">
-              <label className="btn-ghost cursor-pointer px-3" title="Attach an inspiration image">
+              <label
+                className={`btn-ghost cursor-pointer px-3 ${uploading || busy ? "pointer-events-none opacity-50" : ""}`}
+                title="Attach your logo or an inspiration image"
+              >
                 📎
-                <input type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0], "inspiration")} />
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (f) attach(f);
+                  }}
+                />
               </label>
               <input
                 className="input"
@@ -531,7 +646,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
                 disabled={locked}
                 onChange={(e) => setInput(e.target.value)}
               />
-              <button className="btn-primary" disabled={busy || !input.trim() || locked}>
+              <button className="btn-primary" disabled={busy || uploading || !input.trim() || locked}>
                 Send
               </button>
             </div>

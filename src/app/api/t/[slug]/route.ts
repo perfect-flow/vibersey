@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getTeamBySlug } from "@/lib/teams";
+import { getKits, getTeamBySlug } from "@/lib/teams";
 
 // Public info for a team's shareable order link.
 export async function GET(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
@@ -9,5 +9,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
   return NextResponse.json({
     team: { name: found.team.name, slug: found.team.share_slug },
     design: { id: found.design.id, sport: found.design.sport, title: found.design.title, spec: found.design.spec },
+    kits: (await getKits(found.team)).map((k) => ({ label: k.label, design_id: k.design_id, spec: k.spec })),
   });
 }

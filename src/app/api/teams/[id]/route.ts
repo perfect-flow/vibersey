@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActor } from "@/lib/usage";
 import { getDesign } from "@/lib/designs";
-import { getTeamForOwner } from "@/lib/teams";
+import { getKits, getTeamForOwner } from "@/lib/teams";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -10,11 +10,12 @@ export async function GET(_req: Request, { params }: Ctx) {
   const { id } = await params;
   const team = await getTeamForOwner(id, await getActor());
   if (!team) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  const [design, { data: roster }] = await Promise.all([
+  const [design, kits, { data: roster }] = await Promise.all([
     getDesign(team.design_id),
+    getKits(team),
     supabaseAdmin().from("roster_entries").select("*").eq("team_id", id).order("created_at"),
   ]);
-  return NextResponse.json({ team, design, roster: roster ?? [] });
+  return NextResponse.json({ team, design, kits, roster: roster ?? [] });
 }
 
 export async function PATCH(req: Request, { params }: Ctx) {
