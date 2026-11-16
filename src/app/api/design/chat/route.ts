@@ -14,6 +14,7 @@ const Body = z.object({
   sport: z.enum(SPORTS),
   message: z.string().min(1).max(2000),
   inspirationImage: z.string().url().nullable().optional(),
+  attachmentIsLogo: z.boolean().optional(),
   // the jersey picked (new designs) and the editor's current spec, so manual
   // edits and uploads that haven't been saved yet aren't lost
   product: z.string().optional(),
@@ -24,7 +25,7 @@ const Body = z.object({
 export async function POST(req: Request) {
   const parsed = Body.safeParse(await req.json());
   if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-  const { designId, sport, message, inspirationImage, product, spec: draftSpec } = parsed.data;
+  const { designId, sport, message, inspirationImage, attachmentIsLogo, product, spec: draftSpec } = parsed.data;
   const actor = await getActor();
   const db = supabaseAdmin();
 
@@ -61,7 +62,7 @@ export async function POST(req: Request) {
 
   const history = await getMessages(design!.id);
   try {
-    const result = await runDesignTurn({ spec: current, history, message, inspirationImage });
+    const result = await runDesignTurn({ spec: current, history, message, inspirationImage, attachmentIsLogo });
     const title = result.title && design!.title === "Untitled jersey" ? result.title : design!.title;
     await db.from("designs").update({ spec: result.spec, title, updated_at: new Date().toISOString() }).eq("id", design!.id);
     await db.from("design_messages").insert([

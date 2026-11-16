@@ -34,7 +34,7 @@ How designs work:
 - Player names and numbers are drawn by code, never by the image model. Never put words, letters or numbers into artwork or logo prompts.
 - pattern.style can be solid, stripes, pinstripes, hoops, gradient, or artwork. Use "artwork" for anything more creative (camo, flames, geometric, brush strokes, cityscapes, inspiration images). When you want new artwork, set artwork_prompt to a vivid description of a full-bleed, seamless, TEXT-FREE textile graphic using the jersey's colors. Leave artwork_prompt null to keep the current artwork.
 - Logo size and placement: logo.position is one of auto (the sport's usual spot, currently ${DEFAULT_LOGO_POSITION[spec.sport].replace("_", " ")}), above_name (centered above the chest team name), center_chest (big crest in the middle of the chest), left_chest, right_chest, sleeves, upper_back. logo.scale multiplies the size (0.5 to 3, 1 = standard). When asked to make the logo bigger, raise logo.scale by about 0.5 each time; for a really big logo use center_chest, and turn off wordmark.show and lettering.numberFront if they would overlap it. When asked for smaller, lower it.
-- If the customer wants an AI logo, set logo_prompt to a description of a flat, bold, vector-style sports emblem with NO text, centered on a plain pure white background. Leave null otherwise. If they uploaded a logo (logo.source = "upload"), keep it unless they ask to replace it.
+- Only set logo_prompt when the customer asks you to create a logo for them. Then describe a flat, bold, vector-style sports emblem with NO text, centered on a plain pure white background. Leave it null otherwise. If they uploaded a logo (logo.source = "upload"), keep it and never replace it unless they ask for a new one. If they mention their own logo but none is uploaded, tell them to tap "Upload logo" (or attach it with the paperclip) instead of drawing one.
 - The team name printed on the chest is wordmark.text (uppercase usually, max 30 chars). Whenever the team name changes, set both teamName and wordmark.text, and set wordmark.show to true unless they ask to hide it.
 - The player name and number shown on the jersey are sample.name (max 16 chars, uppercase) and sample.number (up to 3 digits). The name prints on the back only when lettering.showName is true, so set it to true when they want a name. Team orders replace these per player.
 - Keep the chat reply short and friendly (1-3 sentences): say what you changed and suggest one next idea. Ask about team name, colors, logo and inspiration if you don't know them yet.
@@ -144,13 +144,47 @@ function applyPatch(current: DesignSpec, patch: unknown): DesignSpec {
   return next;
 }
 
+// "make me a new logo", "generate a different logo", "replace my logo with an eagle"
+const ASKS_FOR_AI_LOGO = /\b(generate|create|design|make|draw|new|different|another|replace|redo|ai)\b[^.!?]{0,40}\b(logo|crest|emblem|mascot)\b|\b(logo|crest|emblem|mascot)\b[^.!?]{0,20}\b(instead|replace|redo)\b/i;
+// "use this as my logo", "here's our logo", "put my logo on the chest"
+const MEANS_ATTACHED_LOGO = /\b(my|our|this|the|attached|uploaded)\s+(team\s+)?(logo|crest|emblem)\b|\b(use|add|put|place)\b[^.!?]{0,30}\b(logo|crest|emblem)\b/i;
+
+export function wantsAiLogo(message: string) {
+  if (!ASKS_FOR_AI_LOGO.test(message)) return false;
+  const fresh = /\b(new|different|another|generate|create|draw|ai|redo|replace|instead)\b/i;
+  if (/\b(my|our|this|attached|uploaded)\s+(own\s+)?logo\b/i.test(message) && !fresh.test(message)) return false;
+  // "make the logo bigger" is a resize, not a request for a new logo
+  const resize = /\b(bigger|smaller|larger|size|move|position|left|right|center|centre|sleeves?|back|higher|lower)\b/i.test(message);
+  return !resize || fresh.test(message);
+}
+
 export async function runDesignTurn(input: {
   spec: DesignSpec;
   history: ChatTurn[];
   message: string;
   inspirationImage?: string | null; // data URL or public URL the customer attached
+  attachmentIsLogo?: boolean; // the customer marked the attached image as their logo
 }) {
-  const userContent: unknown[] = [{ type: "text", text: input.message }];
+  // An image attached in chat and called "my logo" goes on the jersey as is.
+  // Otherwise the model would treat it as inspiration and draw its own logo.
+  const attachedLogo =
+    !!input.inspirationImage &&
+    (input.attachmentIsLogo || (MEANS_ATTACHED_LOGO.test(input.message) && !wantsAiLogo(input.message)));
+  if (attachedLogo) {
+    input = {
+      ...input,
+      spec: { ...input.spec, logo: { ...input.spec.logo, url: input.inspirationImage!, source: "upload", prompt: null } },
+    };
+  }
+
+  const userContent: unknown[] = [
+    {
+      type: "text",
+      text: attachedLogo
+        ? `${input.message}\n\n(The attached image is my own logo. It is already placed on the jersey; do not generate a logo.)`
+        : input.message,
+    },
+  ];
   if (input.inspirationImage) userContent.push({ type: "image_url", image_url: { url: input.inspirationImage } });
 
   const args = await chatTool<ToolArgs>({
@@ -164,7 +198,11 @@ export async function runDesignTurn(input: {
 
   // never let the model change the sport or drop a customer's uploaded logo
   const next = applyPatch(input.spec, args.spec);
+  // An uploaded logo is only replaced when the customer clearly asks for a new one.
+  if (input.spec.logo.source === "upload" && (attachedLogo || !wantsAiLogo(input.message))) args.logo_prompt = null;
   if (input.spec.logo.source === "upload" && !args.logo_prompt) next.logo = { ...next.logo, url: input.spec.logo.url, source: "upload", prompt: null };
+  // Only draw a logo when one was asked for, never on a whim.
+  if (args.logo_prompt && input.spec.logo.url && !wantsAiLogo(input.message)) args.logo_prompt = null;
 
   const { colors } = next;
   const palette = `${colors.primary}, ${colors.secondary}, ${colors.accent}`;
