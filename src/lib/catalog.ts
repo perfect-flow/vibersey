@@ -55,8 +55,8 @@ export const STANDARDS: Record<Sport, SportStandard> = {
     label: "Basketball",
     layout: {
       front: {
-        wordmark: { x: 0.5, y: 0.3, h: 0.07, w: 0.55 },
-        number: { x: 0.5, y: 0.46, h: 0.17 },
+        wordmark: { x: 0.5, y: 0.285, h: 0.065, w: 0.55 },
+        number: { x: 0.5, y: 0.49, h: 0.16 },
       },
       back: {
         name: { x: 0.5, y: 0.2, h: 0.045, w: 0.55 },
@@ -72,8 +72,8 @@ export const STANDARDS: Record<Sport, SportStandard> = {
     label: "Football",
     layout: {
       front: {
-        wordmark: { x: 0.5, y: 0.24, h: 0.04, w: 0.4 },
-        number: { x: 0.5, y: 0.45, h: 0.26 },
+        wordmark: { x: 0.5, y: 0.245, h: 0.04, w: 0.4 },
+        number: { x: 0.5, y: 0.475, h: 0.25 },
       },
       back: {
         name: { x: 0.5, y: 0.17, h: 0.045, w: 0.6 },
@@ -128,7 +128,7 @@ export const LOGO_POSITIONS = ["auto", "above_name", "center_chest", "left_chest
 export type LogoPosition = (typeof LOGO_POSITIONS)[number];
 
 export const LOGO_SPOTS: Record<Exclude<LogoPosition, "auto">, Partial<Record<Placement, LayoutBox>> & { anchorTop?: boolean }> = {
-  above_name: { front: { x: 0.5, y: 0.155, h: 0.11, w: 0.3 }, anchorTop: true },
+  above_name: { front: { x: 0.5, y: 0.15, h: 0.125, w: 0.34 }, anchorTop: true },
   center_chest: { front: { x: 0.5, y: 0.36, h: 0.26, w: 0.62 } },
   left_chest: { front: { x: 0.67, y: 0.24, h: 0.13, w: 0.26 } },
   right_chest: { front: { x: 0.33, y: 0.24, h: 0.13, w: 0.26 } },

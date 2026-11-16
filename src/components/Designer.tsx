@@ -278,7 +278,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
                       onClick={() => pickProduct(p.key)}
                       className="card flex items-center gap-4 p-4 text-left transition hover:border-volt"
                     >
-                      <JerseyPreview spec={defaultSpec(sport, p.key)} player={{ name: "", number: "" }} view="front" className="h-20 w-20 shrink-0" />
+                      <JerseyPreview spec={defaultSpec(sport, p.key, 1)} player={{ name: "", number: "" }} view="front" className="h-20 w-20 shrink-0" />
                       <div>
                         <div className="font-semibold">{p.label}</div>
                         <div className="text-sm text-muted">
