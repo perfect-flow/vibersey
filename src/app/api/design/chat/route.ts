@@ -14,7 +14,8 @@ const Body = z.object({
   sport: z.enum(SPORTS),
   message: z.string().min(1).max(2000),
   inspirationImage: z.string().url().nullable().optional(),
-  // used only when starting a new design: the jersey picked and any manual tweaks
+  // the jersey picked (new designs) and the editor's current spec, so manual
+  // edits and uploads that haven't been saved yet aren't lost
   product: z.string().optional(),
   spec: z.unknown().optional(),
 });
@@ -50,9 +51,17 @@ export async function POST(req: Request) {
     design = data;
   }
 
+  // Prefer the editor's current spec (it may hold a just-uploaded logo or a
+  // tweak still waiting on its debounced save). Sport and product can't change.
+  let current = design!.spec;
+  if (designId && draftSpec && typeof draftSpec === "object") {
+    const fromClient = DesignSpecSchema.safeParse({ ...draftSpec, sport: design!.spec.sport, product: design!.spec.product });
+    if (fromClient.success) current = fromClient.data;
+  }
+
   const history = await getMessages(design!.id);
   try {
-    const result = await runDesignTurn({ spec: design!.spec, history, message, inspirationImage });
+    const result = await runDesignTurn({ spec: current, history, message, inspirationImage });
     const title = result.title && design!.title === "Untitled jersey" ? result.title : design!.title;
     await db.from("designs").update({ spec: result.spec, title, updated_at: new Date().toISOString() }).eq("id", design!.id);
     await db.from("design_messages").insert([

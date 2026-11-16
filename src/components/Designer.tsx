@@ -92,31 +92,37 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
 
   // Save manual tweaks (debounced). These don't use up free generations.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const designIdRef = useRef(designId);
+  designIdRef.current = designId;
   const patchSpec = useCallback(
     (fn: (s: DesignSpec) => DesignSpec) => {
       setSpec((prev) => {
         if (!prev || locked) return prev;
         const next = fn(structuredClone(prev));
-        if (designId) {
+        // read the id from a ref: a design created moments ago (first chat or
+        // upload) isn't in this callback's closure yet
+        const id = designIdRef.current;
+        if (id) {
           if (saveTimer.current) clearTimeout(saveTimer.current);
           saveTimer.current = setTimeout(() => {
-            api(`/api/design/${designId}`, { method: "PATCH", body: JSON.stringify({ spec: next }) });
+            api(`/api/design/${id}`, { method: "PATCH", body: JSON.stringify({ spec: next }) });
           }, 600);
         }
         return next;
       });
     },
-    [designId, locked]
+    [locked]
   );
 
-  async function ensureDesign(): Promise<string | null> {
+  async function ensureDesign(current: DesignSpec | null = spec): Promise<string | null> {
     if (designId) return designId;
-    if (!spec) return null;
+    if (!current) return null;
     const { ok, data } = await api<{ design: { id: string } }>("/api/designs", {
       method: "POST",
-      body: JSON.stringify({ sport: spec.sport, product: spec.product, spec }),
+      body: JSON.stringify({ sport: current.sport, product: current.product, spec: current }),
     });
     if (!ok) return null;
+    designIdRef.current = data.design.id;
     setDesignId(data.design.id);
     window.history.replaceState(null, "", `/design/${data.design.id}`);
     return data.design.id;
@@ -153,7 +159,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
         designId,
         sport: spec.sport,
         product: spec.product,
-        spec: designId ? undefined : spec,
+        spec,
         message: text,
         inspirationImage: inspiration,
       }),
@@ -167,6 +173,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
       return;
     }
     if (data.designId && !designId) {
+      designIdRef.current = data.designId;
       setDesignId(data.designId);
       window.history.replaceState(null, "", `/design/${data.designId}`);
     }
@@ -181,18 +188,29 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
   }
 
   async function upload(file: File, kind: "logo" | "inspiration") {
+    if (locked) return setNotice("This is a locked team template. Duplicate it from My designs to keep designing.");
+    setNotice(kind === "logo" ? "Uploading logo…" : "Uploading image…");
     const form = new FormData();
     form.append("file", file);
     form.append("kind", kind);
-    setNotice(kind === "logo" ? "Uploading logo…" : "Uploading image…");
-    const res = await fetch("/api/upload", { method: "POST", body: form });
-    const data = await res.json();
-    if (!res.ok) return setNotice(data.error ?? "Upload failed");
-    setNotice(null);
-    if (kind === "logo") {
-      await ensureDesign();
-      patchSpec((s) => ({ ...s, logo: { ...s.logo, url: data.url, source: "upload", prompt: null } }));
-    } else setInspiration(data.url);
+    let data: { url?: string; error?: string } = {};
+    let ok = false;
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      ok = res.ok;
+      data = await res.json().catch(() => ({}));
+    } catch {
+      // network error, handled below
+    }
+    if (!ok || !data.url) return setNotice(data.error ?? "Upload failed. Please try again.");
+    setNotice(kind === "logo" ? null : "Image attached. Send a message to use it as inspiration.");
+    if (kind !== "logo" || !spec) return setInspiration(data.url);
+    // Apply and save right away (not debounced) so the logo survives a refresh
+    // or an immediate chat message.
+    const next: DesignSpec = { ...spec, logo: { ...spec.logo, url: data.url, source: "upload", prompt: null } };
+    setSpec(next);
+    const id = await ensureDesign(next);
+    if (id) await api(`/api/design/${id}`, { method: "PATCH", body: JSON.stringify({ spec: next }) });
   }
 
   async function save() {
