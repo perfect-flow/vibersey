@@ -7,6 +7,7 @@ import { cleanPlayer } from "./design-spec";
 
 export type OrderItem = {
   design_id: string;
+  kit?: string | null; // team kit label (Home, Away...) when a team has several
   sport: string;
   product_key: string; // may be the youth version of the design's product
   variant_id: number;
@@ -51,7 +52,7 @@ export async function fulfillOrder(orderId: string) {
         variant_id: i.variant_id,
         quantity: i.quantity,
         retail_price: (i.unit_price_cents / 100).toFixed(2),
-        name: [i.name, i.number && `#${i.number}`].filter(Boolean).join(" ") || "Vibersey jersey",
+        name: [i.kit, i.name, i.number && `#${i.number}`].filter(Boolean).join(" ") || "Vibersey jersey",
         files: i.files!,
       })),
     });
