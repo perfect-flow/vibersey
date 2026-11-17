@@ -9,7 +9,8 @@
 export const SPORTS = ["baseball", "basketball", "football", "hockey", "soccer"] as const;
 export type Sport = (typeof SPORTS)[number];
 
-export type Placement = "front" | "back" | "sleeve_left" | "sleeve_right";
+// "yoke" is the separate shoulder piece some jerseys (hockey) are sewn from.
+export type Placement = "front" | "back" | "sleeve_left" | "sleeve_right" | "yoke";
 
 export type LayoutBox = {
   // normalized to the panel: 0..1 from the top-left corner
@@ -220,7 +221,7 @@ export const PRODUCTS: ProductDef[] = [
   },
   {
     key: "hockey-recycled", sport: "hockey", label: "Recycled hockey jersey", audience: "adult",
-    title: "All-Over Print Recycled Hockey Fan Jersey", printfulProductId: 730, placements: SLEEVED,
+    title: "All-Over Print Recycled Hockey Fan Jersey", printfulProductId: 730, placements: [...SLEEVED, "yoke"],
     dashboardUrl: `${DASH}/mens/long-sleeve-shirts/all-over-print-recycled-hockey-fan-jersey`,
   },
 ];

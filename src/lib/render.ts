@@ -77,6 +77,8 @@ function textEl(opts: {
 
 function background(spec: DesignSpec, placement: Placement, W: number, H: number, resolveImage?: RenderOptions["resolveImage"], idp = "") {
   const { primary, secondary, accent } = spec.colors;
+  // the shoulder piece: the contrasting yoke color, or the body graphic
+  if (placement === "yoke" && spec.trim.yoke) return `<rect width="${W}" height="${H}" fill="${secondary}"/>`;
   const parts: string[] = [`<rect width="${W}" height="${H}" fill="${primary}"/>`];
   const p = spec.pattern;
   switch (p.style) {
