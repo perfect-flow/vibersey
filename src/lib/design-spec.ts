@@ -61,6 +61,9 @@ export const DesignSpecSchema = z.object({
     position: z.enum(LOGO_POSITIONS).default("auto"),
     // size multiplier on top of the spot's standard size
     scale: z.number().min(0.5).max(3).default(1),
+    // customer's nudge from the spot, as a fraction of the fabric piece
+    offsetX: z.number().min(-0.5).max(0.5).default(0),
+    offsetY: z.number().min(-0.5).max(0.5).default(0),
   }),
   wordmark: z.object({
     show: z.boolean().default(true),
@@ -76,6 +79,11 @@ export const DesignSpecSchema = z.object({
     numberBack: z.boolean(),
     numberSleeves: z.boolean(),
     outlineWidth: z.number().min(0).max(0.2).default(0.06), // fraction of glyph height
+    // customer's size and height adjustments; offsets are fractions of the piece
+    numberScale: z.number().min(0.5).max(1.6).default(1),
+    numberOffsetY: z.number().min(-0.3).max(0.3).default(0),
+    nameScale: z.number().min(0.5).max(1.8).default(1),
+    nameOffsetY: z.number().min(-0.3).max(0.3).default(0),
   }),
   // name/number shown in previews. Orders and team rosters override these.
   sample: z.object({
@@ -102,7 +110,7 @@ export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
     },
     pattern: { style: sport === "baseball" ? "pinstripes" : "solid", artworkUrl: null, artworkPrompt: null, opacity: 1 },
     trim: { yoke: sport === "hockey", hemStripes: sport === "hockey", sleeveStripes: sport === "football" || sport === "hockey" },
-    logo: { url: null, source: null, prompt: null, position: "auto", scale: 1 },
+    logo: { url: null, source: null, prompt: null, position: "auto", scale: 1, offsetX: 0, offsetY: 0 },
     wordmark: {
       show: sport !== "hockey",
       text: "TEAM",
