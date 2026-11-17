@@ -5,8 +5,24 @@ import type { DesignSpec, Player } from "@/lib/design-spec";
 
 type Image = { url: string; title: string };
 
-// "See it on a model": asks Printful to dress its product photos in this
-// design and shows them in a gallery.
+// "See it on a model": dresses product photos of real models in this design
+// and shows them in a gallery. Photos are kept per design version, both here
+// (instant when reopened) and on the server.
+const seen = new Map<string, Image[]>();
+const versionKey = (designId: string, spec?: DesignSpec, player?: Player) => `${designId}:${JSON.stringify({ spec, player })}`;
+
+async function download(img: Image, i: number) {
+  try {
+    const blob = await (await fetch(img.url)).blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `vibersey-model-${i + 1}.${blob.type.includes("png") ? "png" : "jpg"}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch {
+    window.open(img.url, "_blank");
+  }
+}
 export function ModelPreviewButton(props: {
   getDesignId: () => Promise<string | null>; // creates/saves the design if needed
   spec?: DesignSpec; // live spec for an editable design
@@ -46,6 +62,9 @@ function ModelPreviewDialog({
     (async () => {
       const designId = await getDesignId();
       if (!designId) return setError("Save the design first, then try again.");
+      const vk = versionKey(designId, spec, player);
+      const known = seen.get(vk);
+      if (known) return setImages(known);
       const r = await fetch("/api/mockups", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -61,6 +80,7 @@ function ModelPreviewDialog({
       }
       if (!alive.current) return;
       if (d.status !== "completed" || !d.images?.length) return setError(d.error ?? "The preview is taking too long. Please try again.");
+      seen.set(vk, d.images);
       setImages(d.images);
     })();
     return () => {
@@ -83,13 +103,18 @@ function ModelPreviewDialog({
         ) : !images ? (
           <div className="py-16 text-center text-muted">
             <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-line border-t-[var(--color-volt)]" />
-            Printful is dressing the model in your design. This takes about 20 to 40 seconds.
+            Dressing the models in your design. This takes about 20 to 40 seconds the first time.
           </div>
         ) : (
           <div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={images[active].url} alt={images[active].title} className="mx-auto max-h-[60vh] w-auto rounded" />
-            <p className="mt-1 text-center text-xs text-muted">{images[active].title}</p>
+            <div className="mt-2 flex items-center justify-center gap-3 text-xs text-muted">
+              <span>{images[active].title}</span>
+              <button className="btn-ghost px-3 py-1 text-xs" onClick={() => download(images[active], active)}>
+                Download
+              </button>
+            </div>
             {images.length > 1 && (
               <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
                 {images.map((img, i) => (
@@ -100,7 +125,7 @@ function ModelPreviewDialog({
                 ))}
               </div>
             )}
-            <p className="mt-3 text-xs text-muted">Model photos by Printful. Colors on screen can differ slightly from the printed jersey.</p>
+            <p className="mt-3 text-xs text-muted">Colors on screen can differ slightly from the printed jersey.</p>
           </div>
         )}
       </div>
