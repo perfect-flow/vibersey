@@ -7,6 +7,8 @@
 
 import { STANDARDS, LOGO_SPOTS, DEFAULT_LOGO_POSITION, productByKey, type LayoutBox, type Placement } from "./catalog";
 import { FONTS, type DesignSpec, type Player } from "./design-spec";
+import { PROCEDURAL, texture } from "./patterns";
+import { contrast, tone } from "./color";
 import { pieceFor } from "./garments";
 
 export type RenderOptions = {
@@ -72,9 +74,12 @@ function textEl(opts: {
   stroke: string;
   outline: number;
   arch?: boolean;
+  effect?: DesignSpec["lettering"]["effect"];
+  inner?: string; // inner outline color for the double effect
 }) {
   const { id, text, font, box, W, H, fill, stroke, outline, arch } = opts;
   if (!text) return "";
+  const effect = opts.effect ?? "single";
   const f = FONTS[font];
   const size = fitFontSize(text, font, box, W, H);
   const cx = box.x * W;
@@ -82,15 +87,44 @@ function textEl(opts: {
   const sw = size * outline * 2;
   const common = `font-family="${f.family}" font-size="${size.toFixed(1)}"${
     "weight" in f ? ` font-weight="${f.weight}"` : ""
-  }${"italic" in f ? ` font-style="italic"` : ""} fill="${fill}" stroke="${stroke}" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round" paint-order="stroke" text-anchor="middle"`;
-  if (!arch) {
-    return `<text x="${cx.toFixed(1)}" y="${baseline.toFixed(1)}" ${common}>${esc(text)}</text>`;
+  }${"italic" in f ? ` font-style="italic"` : ""} stroke-linejoin="round" paint-order="stroke" text-anchor="middle"`;
+  let defs = "";
+  let pos = `x="${cx.toFixed(1)}" y="${baseline.toFixed(1)}"`;
+  let content = esc(text);
+  if (arch) {
+    // gentle upward arch, like a classic varsity chest wordmark
+    const half = ((box.w ?? 0.6) * W) / 2;
+    const rise = size * 0.55;
+    const d = `M ${cx - half} ${baseline + rise} Q ${cx} ${baseline - rise} ${cx + half} ${baseline + rise}`;
+    defs = `<path id="${id}" d="${d}" fill="none"/>`;
+    pos = "";
+    content = `<textPath href="#${id}" startOffset="50%">${esc(text)}</textPath>`;
   }
-  // gentle upward arch, like a classic varsity chest wordmark
-  const half = ((box.w ?? 0.6) * W) / 2;
-  const rise = size * 0.55;
-  const d = `M ${cx - half} ${baseline + rise} Q ${cx} ${baseline - rise} ${cx + half} ${baseline + rise}`;
-  return `<path id="${id}" d="${d}" fill="none"/><text ${common}><textPath href="#${id}" startOffset="50%">${esc(text)}</textPath></text>`;
+  const layer = (fl: string, st: string, w: number) =>
+    `<text ${pos} ${common} fill="${fl}" stroke="${st}" stroke-width="${w.toFixed(1)}">${content}</text>`;
+  const double = effect === "double" || effect === "double-shadow";
+  const shadow = effect === "shadow" || effect === "double-shadow";
+  const outerW = double ? sw * 1.9 : sw;
+  const layers: string[] = [];
+  if (shadow) {
+    const off = size * 0.055;
+    layers.push(`<g transform="translate(${(off * 0.7).toFixed(1)} ${off.toFixed(1)})" opacity="0.9">${layer(stroke, stroke, outerW)}</g>`);
+  }
+  if (double) {
+    // pro tackle-twill look: outer outline, then a thinner inner ring
+    layers.push(layer(stroke, stroke, outerW));
+    layers.push(layer(fill, opts.inner ?? stroke, sw * 0.95));
+  } else layers.push(layer(fill, stroke, sw));
+  return defs + layers.join("");
+}
+
+// Inner ring color for double outlines: the accent, unless it would vanish
+// against the fill or the outer outline.
+function innerRing(spec: DesignSpec) {
+  const { accent, text, outline, primary } = spec.colors;
+  if (contrast(accent, text) >= 1.6 && contrast(accent, outline) >= 1.3) return accent;
+  if (contrast(primary, text) >= 1.6 && contrast(primary, outline) >= 1.3) return primary;
+  return contrast(text, "#000000") > contrast(text, "#FFFFFF") ? "#000000" : "#FFFFFF";
 }
 
 function background(spec: DesignSpec, placement: Placement, W: number, H: number, resolveImage?: RenderOptions["resolveImage"], idp = "") {
@@ -99,6 +133,24 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
   if (placement === "yoke" && spec.trim.yoke) return `<rect width="${W}" height="${H}" fill="${secondary}"/>`;
   const parts: string[] = [`<rect width="${W}" height="${H}" fill="${primary}"/>`];
   const p = spec.pattern;
+  const proc = PROCEDURAL[p.style];
+  // body-shaped graphics (bands across the torso) don't belong on a separate shoulder piece
+  const bodyOnly = placement === "yoke" && ["sash", "chevron", "waves"].includes(p.style);
+  if (proc && !bodyOnly) {
+    const tonal = p.tone === "tonal";
+    // drawn in the fabric piece's own box so graphics line up with the real garment
+    const gb = pieceBox(spec, placement);
+    parts.push(
+      `<g opacity="${p.opacity}" transform="translate(${(gb.x * W).toFixed(1)} ${(gb.y * H).toFixed(1)})">${proc({
+        W: gb.w * W, H: gb.h * H, placement, primary,
+        c1: tonal ? tone(primary, 0.14) : secondary,
+        c2: tonal ? tone(primary, 0.28) : accent,
+        seed: p.seed ?? 1,
+        scale: p.scale ?? 1,
+        idp: `${idp}${placement}`,
+      })}</g>`
+    );
+  }
   switch (p.style) {
     case "stripes": {
       const n = 7;
@@ -138,6 +190,14 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
   const pb = pieceBox(spec, placement);
   const band = (from: number, height: number, fill: string) =>
     `<rect x="0" y="${(pb.y + from * pb.h) * H}" width="${W}" height="${height * pb.h * H}" fill="${fill}"/>`;
+  if (spec.trim.sidePanels && (placement === "front" || placement === "back")) {
+    // panels down both side seams of the fabric piece, with an accent pinline
+    const pw = pb.w * 0.1 * W;
+    const lw = pb.w * 0.012 * W;
+    const x0 = pb.x * W, x1 = (pb.x + pb.w) * W;
+    parts.push(`<rect x="0" y="0" width="${x0 + pw}" height="${H}" fill="${secondary}"/><rect x="${x1 - pw}" y="0" width="${W - x1 + pw}" height="${H}" fill="${secondary}"/>`);
+    parts.push(`<rect x="${x0 + pw}" y="0" width="${lw}" height="${H}" fill="${accent}"/><rect x="${x1 - pw - lw}" y="0" width="${lw}" height="${H}" fill="${accent}"/>`);
+  }
   // jerseys with a separate shoulder piece get the color there instead
   const hasYokePiece = productByKey(spec.product)?.placements.includes("yoke");
   if (spec.trim.yoke && !hasYokePiece) parts.push(`<rect x="0" y="0" width="${W}" height="${(pb.y + 0.14 * pb.h) * H}" fill="${secondary}"/>`);
@@ -148,6 +208,7 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
     const at = isLongSleeve(spec, placement) ? 0.66 : 0.72;
     parts.push(band(at, 0.06, secondary), band(at + 0.08, 0.035, accent));
   }
+  if (p.texture && p.texture !== "none") parts.push(texture(p.texture, W, H, primary, `${idp}${placement}`));
   return parts.join("");
 }
 
@@ -215,8 +276,29 @@ export function renderPanelInner(spec: DesignSpec, placement: Placement, o: Rend
     if (href) {
       const h = layout.logo.h * H;
       const w = layout.logo.w ? layout.logo.w * W : h;
+      const fid = `${o.idPrefix ?? ""}lf-${placement}`;
+      const effect = spec.logo.effect ?? "none";
+      let filter = "";
+      if (effect === "outline") {
+        // sticker-style border in a color that pops off the body. A thresholded
+        // blur grows the silhouette; feMorphology looks the same but is far too
+        // slow at print resolution.
+        const { text, primary } = spec.colors;
+        const ring = contrast(text, primary) >= 3 ? text : contrast("#FFFFFF", primary) > contrast("#000000", primary) ? "#FFFFFF" : "#000000";
+        const r = h * 0.03;
+        els.push(
+          `<defs><filter id="${fid}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="${(r / 1.3).toFixed(1)}" result="bl"/><feComponentTransfer in="bl" result="d"><feFuncA type="linear" slope="12" intercept="0"/></feComponentTransfer><feFlood flood-color="${ring}"/><feComposite in2="d" operator="in" result="o"/><feGaussianBlur in="d" stdDeviation="${(r * 0.8).toFixed(1)}" result="b"/><feOffset in="b" dy="${(r * 0.6).toFixed(1)}" result="s"/><feFlood flood-color="#000" flood-opacity="0.35"/><feComposite in2="s" operator="in" result="sh"/><feMerge><feMergeNode in="sh"/><feMergeNode in="o"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>`
+        );
+        filter = ` filter="url(#${fid})"`;
+      } else if (effect === "shadow") {
+        const r = h * 0.025;
+        els.push(
+          `<defs><filter id="${fid}" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur in="SourceAlpha" stdDeviation="${r.toFixed(1)}" result="b"/><feOffset in="b" dy="${(r * 0.8).toFixed(1)}" result="s"/><feFlood flood-color="#000" flood-opacity="0.45"/><feComposite in2="s" operator="in" result="sh"/><feMerge><feMergeNode in="sh"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>`
+        );
+        filter = ` filter="url(#${fid})"`;
+      }
       els.push(
-        `<image href="${esc(href)}" x="${layout.logo.x * W - w / 2}" y="${layout.logo.y * H - h / 2}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid meet"/>`
+        `<image href="${esc(href)}" x="${layout.logo.x * W - w / 2}" y="${layout.logo.y * H - h / 2}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid meet"${filter}/>`
       );
     }
   }
@@ -234,6 +316,8 @@ export function renderPanelInner(spec: DesignSpec, placement: Placement, o: Rend
         stroke: spec.colors.outline,
         outline: L.outlineWidth,
         arch: spec.wordmark.style === "arch",
+        effect: L.effect,
+        inner: innerRing(spec),
       })
     );
   }
@@ -251,6 +335,8 @@ export function renderPanelInner(spec: DesignSpec, placement: Placement, o: Rend
         stroke: spec.colors.outline,
         outline: L.outlineWidth,
         arch: spec.sport === "baseball",
+        effect: L.effect === "double-shadow" ? "double" : L.effect,
+        inner: innerRing(spec),
       })
     );
   }
@@ -269,6 +355,8 @@ export function renderPanelInner(spec: DesignSpec, placement: Placement, o: Rend
         fill: spec.colors.text,
         stroke: spec.colors.outline,
         outline: L.outlineWidth,
+        effect: L.effect,
+        inner: innerRing(spec),
       })
     );
   }

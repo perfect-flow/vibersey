@@ -34,6 +34,7 @@ Design a custom sports jersey by chatting with AI, then have Printful print and 
 npm install
 npm run dev
 npx tsx scripts/render-sample.ts   # renders sample print panels to ./tmp-render
+npx tsx --tsconfig scripts/tsconfig.json scripts/render-previews.ts   # garment previews of sample designs to ./tmp-previews (GALLERY=1 for every pattern)
 ```
 
 ## Known limits (v1)

@@ -1,7 +1,7 @@
 import "server-only";
 import { z } from "zod";
 import { STANDARDS, DEFAULT_LOGO_POSITION, productByKey } from "./catalog";
-import { DesignSpecSchema, FONTS, type DesignSpec } from "./design-spec";
+import { DesignSpecSchema, FONTS, PATTERN_STYLES, type DesignSpec } from "./design-spec";
 import { chatTool, generateImage } from "./openrouter";
 import { knockOutBackground, uploadPublic } from "./images";
 
@@ -15,11 +15,15 @@ type ToolArgs = {
   title?: string | null;
 };
 
+const patternList = Object.entries(PATTERN_STYLES)
+  .map(([k, d]) => `  - ${k}: ${d}`)
+  .join("\n");
+
 const fontList = Object.entries(FONTS)
   .map(([k, f]) => `${k} (${f.label})`)
   .join(", ");
 
-function systemPrompt(spec: DesignSpec) {
+export function systemPrompt(spec: DesignSpec) {
   const std = STANDARDS[spec.sport];
   const product = productByKey(spec.product)!;
   return `You are Vibersey's jersey designer. You chat with a customer and design a custom ${std.label.toLowerCase()} jersey that Printful will print on its "${product.title}" (all-over sublimation print, panels: ${product.placements.join(", ")}).
@@ -29,12 +33,23 @@ ${std.guidance}
 
 How designs work:
 - You always call the apply_design tool. "spec" is the COMPLETE updated design (copy unchanged fields from the current spec).
-- Colors are 6-digit hex. Make sure name/number "text" and "outline" colors contrast strongly with "primary" and with any artwork.
+
+Design direction. These are all-over sublimated jerseys: the whole garment is printed, so plain designs look cheap. Design like a pro kit designer:
+- Give every design a confident graphic. pattern.style options:
+${patternList}
+  Use "solid" only when the customer asks for clean or classic, and then dress it with trim (trim.yoke, trim.hemStripes, trim.sleeveStripes, trim.sidePanels).
+- pattern.tone: "contrast" draws the graphic in secondary + accent (bold); "tonal" draws it in shades of primary (subtle, premium). pattern.scale (0.5 to 2) sets feature size. pattern.seed is the variation: set a new random number (1 to 999999) whenever they want another take, a reshuffle, or "something different" with the same style. pattern.texture "mesh" or "carbon" adds a fine performance-fabric overlay; good on dark bodies.
+- trim.sidePanels adds contrasting panels down the side seams; great on basketball.
+- Palette: primary = dominant body color; secondary = main graphic color; accent = pinlines and the inner ring of the lettering. Stick to 2 or 3 hues plus white or black. Name/number "text" and "outline" must contrast strongly with primary AND with the graphic behind the numbers.
+- Lettering: lettering.effect "double" (pro two-color outline, accent inside, outline color outside) is the default for a pro look; "double-shadow" for aggressive designs; "shadow" for retro and script looks; "single" only for minimal designs. Use the same font for name and number unless asked; the wordmark font can differ.
+- Logo: whenever the body has a busy graphic, set logo.effect to "outline" so the logo pops off it; "shadow" gives subtle depth. On hockey the crest is the hero (center_chest, scale 1.2 to 1.6). Never let the logo overlap a number or the wordmark.
+- Pattern.style "artwork" (an AI image) is only for things the procedural styles can't do: specific scenes, animal textures, flames, smoke, city skylines, or matching an inspiration image. When you want new artwork, set artwork_prompt to a vivid description of a bold, full-bleed, TEXT-FREE sublimation graphic using the jersey's colors, with large shapes, and calmer, darker space in the upper chest where the numbers sit. Leave artwork_prompt null to keep the current artwork.
+- Example recipes: aggressive football = shards tonal + double-shadow block numbers + sleeveStripes; modern soccer = speed or topo tonal + double + crest left chest with outline; flashy basketball = halftone or chevron contrast + sidePanels + mesh + double; retro baseball = cream primary + pinstripes or waves + script wordmark + shadow.
+- Colors are 6-digit hex.
 - Fonts are limited to these keys: ${fontList}. Names and numbers use lettering.nameFont / lettering.numberFont. Pick fonts that suit the sport (block/varsity for numbers; script only for baseball wordmarks).
 - Player names and numbers are drawn by code, never by the image model. Never put words, letters or numbers into artwork or logo prompts.
-- pattern.style can be solid, stripes, pinstripes, hoops, gradient, or artwork. Use "artwork" for anything more creative (camo, flames, geometric, brush strokes, cityscapes, inspiration images). When you want new artwork, set artwork_prompt to a vivid description of a full-bleed, seamless, TEXT-FREE textile graphic using the jersey's colors. Leave artwork_prompt null to keep the current artwork.
 - Logo size and placement: logo.position is one of auto (the sport's usual spot, currently ${DEFAULT_LOGO_POSITION[spec.sport].replace("_", " ")}), above_name (centered above the chest team name), center_chest (big crest in the middle of the chest), left_chest, right_chest, sleeves, upper_back. logo.scale multiplies the size (0.5 to 3, 1 = standard). When asked to make the logo bigger, raise logo.scale by about 0.5 each time; for a really big logo use center_chest, and turn off wordmark.show and lettering.numberFront if they would overlap it. When asked for smaller, lower it. logo.offsetX / logo.offsetY nudge the logo from its spot, as fractions of the jersey panel (-0.5 to 0.5; negative = left / higher); move about 0.04 per "a bit higher/lower/left/right" and reset both to 0 when the position changes. lettering.numberScale (0.5 to 1.6) and lettering.nameScale (0.5 to 1.8) resize the player number and name (1 = standard); lettering.numberOffsetY and lettering.nameOffsetY (-0.3 to 0.3, negative = higher) move them up or down.
-- Only set logo_prompt when the customer asks you to create a logo for them. Then describe a flat, bold, vector-style sports emblem with NO text, centered on a plain pure white background. Leave it null otherwise. If they uploaded a logo (logo.source = "upload"), keep it and never replace it unless they ask for a new one. If they mention their own logo but none is uploaded, tell them to tap "Upload logo" (or attach it with the paperclip) instead of drawing one.
+- Only set logo_prompt when the customer asks you to create a logo for them. Then describe a bold sports mascot or emblem (subject, pose, attitude, colors) with NO text. Leave it null otherwise. If they uploaded a logo (logo.source = "upload"), keep it and never replace it unless they ask for a new one. If they mention their own logo but none is uploaded, tell them to tap "Upload logo" (or attach it with the paperclip) instead of drawing one.
 - The team name printed on the chest is wordmark.text (uppercase usually, max 30 chars). Whenever the team name changes, set both teamName and wordmark.text, and set wordmark.show to true unless they ask to hide it.
 - The player name and number shown on the jersey are sample.name (max 16 chars, uppercase) and sample.number (up to 3 digits). The name prints on the back only when lettering.showName is true, so set it to true when they want a name. Team orders replace these per player.
 - Keep the chat reply short and friendly (1-3 sentences): say what you changed and suggest one next idea. Ask about team name, colors, logo and inspiration if you don't know them yet.
@@ -106,6 +121,8 @@ function tidy(s: Record<string, any>) {
   }
   if (s.logo && typeof s.logo.scale === "number") s.logo.scale = Math.min(3, Math.max(0.5, s.logo.scale));
   if (s.pattern && typeof s.pattern.opacity === "number") s.pattern.opacity = Math.min(1, Math.max(0, s.pattern.opacity));
+  if (s.pattern && typeof s.pattern.scale === "number") s.pattern.scale = Math.min(2, Math.max(0.5, s.pattern.scale));
+  if (s.pattern && s.pattern.seed != null) s.pattern.seed = Math.min(999999, Math.max(1, Math.round(Number(s.pattern.seed)) || 1));
   if (s.lettering && typeof s.lettering.outlineWidth === "number") s.lettering.outlineWidth = Math.min(0.2, Math.max(0, s.lettering.outlineWidth));
   const clamp = (o: Record<string, unknown> | undefined, k: string, lo: number, hi: number) => {
     if (o && typeof o[k] === "number") o[k] = Math.min(hi, Math.max(lo, o[k] as number));
@@ -218,7 +235,9 @@ export async function runDesignTurn(input: {
   const jobs: Promise<void>[] = [];
 
   if (args.artwork_prompt) {
-    const prompt = `${args.artwork_prompt}\n\nFull-bleed seamless textile print for a sublimated ${next.sport} jersey panel, portrait orientation. Color palette: ${palette}. Absolutely no text, letters, numbers, logos, people, mannequins or garment outlines. Flat artwork only, edge to edge.`;
+    const prompt = `${args.artwork_prompt}
+
+Professional sublimated sportswear graphic for a ${next.sport} jersey, the kind of print used on pro esports and team kits. Flat 2D artwork filling the whole canvas edge to edge, portrait orientation. Bold, large-scale shapes, crisp clean edges, rich contrast, dynamic diagonal energy. Keep the upper-middle area (where chest numbers go) calmer and lower in contrast; put the most intense detail toward the sides and the hem. Strict color palette: ${palette}, plus black and white. Absolutely no text, letters, numbers, logos, watermarks, people, mannequins, garments or mockups. Not a photo of fabric, just the print artwork.`;
     jobs.push(
       generateImage(prompt, { aspectRatio: "4:5", reference: input.inspirationImage ?? undefined }).then(async (img) => {
         next.pattern = {
@@ -232,7 +251,9 @@ export async function runDesignTurn(input: {
   }
 
   if (args.logo_prompt) {
-    const prompt = `${args.logo_prompt}\n\nSports team emblem, bold flat vector style, thick clean outlines, colors ${palette}. Centered, filling most of the frame, on a plain solid pure white (#FFFFFF) background. No text, no letters, no numbers, no mockup.`;
+    const prompt = `${args.logo_prompt}
+
+Professional sports team mascot logo, flat vector style like a pro or esports team crest: strong readable silhouette, thick dark outer outline, clean cel shading, limited palette of ${palette} plus black and white. One single emblem, centered, filling about 80% of the frame, isolated on a plain solid pure white (#FFFFFF) background with no shadow, texture or gradient behind it. No text, no letters, no numbers, no mockup, no border frame.`;
     jobs.push(
       generateImage(prompt, { aspectRatio: "1:1" }).then(async (img) => {
         const png = await knockOutBackground(img.bytes);
@@ -242,6 +263,11 @@ export async function runDesignTurn(input: {
   }
 
   const results = await Promise.allSettled(jobs);
+
+  // a newly added logo sitting on a busy graphic gets a sticker outline so it reads
+  const calm = ["solid", "gradient", "fade", "pinstripes"];
+  if (next.logo.url && next.logo.url !== input.spec.logo.url && next.logo.effect === "none" && !calm.includes(next.pattern.style))
+    next.logo = { ...next.logo, effect: "outline" };
   const failed = results.filter((r) => r.status === "rejected").length;
   let reply = args.reply;
   if (failed) reply += " (I couldn't generate one of the images this time. Ask me to try again.)";

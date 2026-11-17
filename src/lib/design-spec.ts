@@ -29,6 +29,34 @@ const fontKeys = Object.keys(FONTS) as [FontKey, ...FontKey[]];
 
 const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
+// Background graphics. The first six are the original styles; the rest are
+// procedural sublimation graphics drawn by src/lib/patterns.ts.
+export const PATTERN_STYLES = {
+  solid: "flat body color",
+  stripes: "bold vertical stripes",
+  pinstripes: "thin classic pinstripes",
+  hoops: "horizontal hoops",
+  gradient: "vertical fade from primary to secondary",
+  artwork: "AI-generated full-bleed image (set artwork_prompt)",
+  sash: "bold diagonal band shoulder to hip with pinlines (front; echoed on back)",
+  chevron: "big V band across the torso below the numbers",
+  halftone: "halftone dots that grow toward the hem over a fade",
+  camo: "digital camo pixels",
+  shards: "low-poly geometric shards, faceted",
+  lightning: "glowing lightning bolts down the sides",
+  topo: "topographic contour lines",
+  speed: "angled speed streaks from the sides",
+  hex: "honeycomb hexagons fading in toward the hem",
+  tiger: "tapered tiger/claw stripes from the side seams",
+  waves: "flowing wave ribbons across the lower body",
+  fade: "diagonal color fade from primary into the graphic color",
+} as const;
+export type PatternStyle = keyof typeof PATTERN_STYLES;
+const patternKeys = Object.keys(PATTERN_STYLES) as [PatternStyle, ...PatternStyle[]];
+
+export const LETTERING_EFFECTS = ["single", "double", "shadow", "double-shadow"] as const;
+export const LOGO_EFFECTS = ["none", "outline", "shadow"] as const;
+
 export const DesignSpecSchema = z.object({
   sport: z.enum(SPORTS),
   // which Printful jersey (see PRODUCTS in catalog.ts)
@@ -42,16 +70,22 @@ export const DesignSpecSchema = z.object({
     outline: hex, // name and number outline
   }),
   pattern: z.object({
-    style: z.enum(["solid", "stripes", "pinstripes", "hoops", "gradient", "artwork"]),
+    style: z.enum(patternKeys),
     // AI-generated, text-free background art (style === "artwork")
     artworkUrl: z.string().url().nullable().default(null),
     artworkPrompt: z.string().nullable().default(null),
     opacity: z.number().min(0).max(1).default(1),
+    // procedural graphics: "contrast" uses secondary/accent, "tonal" uses shades of primary
+    tone: z.enum(["contrast", "tonal"]).default("contrast"),
+    seed: z.number().int().min(1).max(999999).default(1), // same seed = same graphic
+    scale: z.number().min(0.5).max(2).default(1), // feature size
+    texture: z.enum(["none", "mesh", "carbon"]).default("none"), // fine fabric overlay
   }),
   trim: z.object({
     yoke: z.boolean().default(false), // contrasting shoulder band
     hemStripes: z.boolean().default(false),
     sleeveStripes: z.boolean().default(false),
+    sidePanels: z.boolean().default(false), // contrasting panels down the side seams
   }),
   logo: z.object({
     url: z.string().url().nullable().default(null),
@@ -61,6 +95,8 @@ export const DesignSpecSchema = z.object({
     position: z.enum(LOGO_POSITIONS).default("auto"),
     // size multiplier on top of the spot's standard size
     scale: z.number().min(0.5).max(3).default(1),
+    // outline = a sticker-style border so the logo pops off busy graphics
+    effect: z.enum(LOGO_EFFECTS).default("none"),
     // customer's nudge from the spot, as a fraction of the fabric piece
     offsetX: z.number().min(-0.5).max(0.5).default(0),
     offsetY: z.number().min(-0.5).max(0.5).default(0),
@@ -79,6 +115,8 @@ export const DesignSpecSchema = z.object({
     numberBack: z.boolean(),
     numberSleeves: z.boolean(),
     outlineWidth: z.number().min(0).max(0.2).default(0.06), // fraction of glyph height
+    // double = pro two-color outline (accent inside, outline color outside)
+    effect: z.enum(LETTERING_EFFECTS).default("single"),
     // customer's size and height adjustments; offsets are fractions of the piece
     numberScale: z.number().min(0.5).max(1.6).default(1),
     numberOffsetY: z.number().min(-0.3).max(0.3).default(0),
@@ -95,8 +133,19 @@ export type DesignSpec = z.infer<typeof DesignSpecSchema>;
 
 export type Player = { name: string; number: string };
 
-export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
+// A strong starting look per sport, so the very first preview already looks
+// like a real sublimated kit.
+const STARTER_PATTERN: Record<Sport, { style: PatternStyle; tone: "contrast" | "tonal"; texture: "none" | "mesh" | "carbon" }> = {
+  baseball: { style: "pinstripes", tone: "contrast", texture: "none" },
+  basketball: { style: "halftone", tone: "contrast", texture: "mesh" },
+  football: { style: "shards", tone: "tonal", texture: "none" },
+  hockey: { style: "solid", tone: "contrast", texture: "none" },
+  soccer: { style: "speed", tone: "tonal", texture: "none" },
+};
+
+export function defaultSpec(sport: Sport, product?: ProductKey, seed = 1 + Math.floor(Math.random() * 999998)): DesignSpec {
   const s = STANDARDS[sport];
+  const starter = STARTER_PATTERN[sport];
   return DesignSpecSchema.parse({
     sport,
     product: product ?? defaultProduct(sport).key,
@@ -108,9 +157,14 @@ export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
       text: "#FFFFFF",
       outline: "#E63946",
     },
-    pattern: { style: sport === "baseball" ? "pinstripes" : "solid", artworkUrl: null, artworkPrompt: null, opacity: 1 },
-    trim: { yoke: sport === "hockey", hemStripes: sport === "hockey", sleeveStripes: sport === "football" || sport === "hockey" },
-    logo: { url: null, source: null, prompt: null, position: "auto", scale: 1, offsetX: 0, offsetY: 0 },
+    pattern: { ...starter, artworkUrl: null, artworkPrompt: null, opacity: sport === "baseball" ? 0.6 : 1, seed, scale: 1 },
+    trim: {
+      yoke: sport === "hockey",
+      hemStripes: sport === "hockey",
+      sleeveStripes: sport === "football" || sport === "hockey",
+      sidePanels: sport === "basketball",
+    },
+    logo: { url: null, source: null, prompt: null, position: "auto", scale: 1, offsetX: 0, offsetY: 0, effect: "none" },
     wordmark: {
       show: sport !== "hockey",
       text: "TEAM",
@@ -125,6 +179,7 @@ export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
       numberBack: s.numbersDefault.back,
       numberSleeves: s.numbersDefault.sleeves,
       outlineWidth: 0.06,
+      effect: sport === "baseball" ? "shadow" : "double",
     },
     sample: { name: "PLAYER", number: "23" },
   });

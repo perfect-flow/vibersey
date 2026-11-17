@@ -15,7 +15,7 @@ export const env = {
   // Chat model that turns the conversation into a structured jersey spec.
   chatModel: () => process.env.OPENROUTER_CHAT_MODEL ?? "anthropic/claude-sonnet-4.5",
   // Image model for text-free artwork and logos.
-  imageModel: () => process.env.OPENROUTER_IMAGE_MODEL ?? "google/gemini-2.5-flash-image",
+  imageModel: () => process.env.OPENROUTER_IMAGE_MODEL ?? "google/gemini-3.1-flash-image",
   printfulToken: () => req("PRINTFUL_API_TOKEN"),
   printfulStoreId: () => process.env.PRINTFUL_STORE_ID,
   // When false, Printful orders are created as drafts for manual review.

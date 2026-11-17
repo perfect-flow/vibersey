@@ -75,8 +75,8 @@ export const STANDARDS: Record<Sport, SportStandard> = {
     label: "Football",
     layout: {
       front: {
-        wordmark: { x: 0.5, y: 0.24, h: 0.04, w: 0.4 },
-        number: { x: 0.5, y: 0.45, h: 0.26 },
+        wordmark: { x: 0.5, y: 0.245, h: 0.04, w: 0.4 },
+        number: { x: 0.5, y: 0.475, h: 0.25 },
       },
       back: {
         name: { x: 0.5, y: 0.17, h: 0.045, w: 0.6 },
