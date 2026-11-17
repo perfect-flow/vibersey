@@ -4,6 +4,7 @@ import { Resvg } from "@resvg/resvg-js";
 import { DEFAULT_PRINTFILE, type Placement } from "./catalog";
 import { FONTS, type DesignSpec, type Player } from "./design-spec";
 import { renderPanelSVG, placementsFor } from "./render";
+import { pieceFor } from "./garments";
 import { uploadPublic } from "./images";
 import type { ProductRow } from "./printful";
 
@@ -39,7 +40,7 @@ export function renderPng(svg: string) {
 export async function renderPanels(spec: DesignSpec, player: Player, product: ProductRow | null, scale = 1) {
   const images = await inlineImages(spec);
   return placementsFor(spec).map((placement) => {
-    const dims = product?.printfiles?.[placement] ?? DEFAULT_PRINTFILE;
+    const dims = product?.printfiles?.[placement] ?? pieceFor(spec.product, placement, DEFAULT_PRINTFILE).dims;
     const svg = renderPanelSVG(spec, placement, {
       width: Math.round(dims.width * scale),
       height: Math.round(dims.height * scale),

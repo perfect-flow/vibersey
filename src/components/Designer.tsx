@@ -17,6 +17,7 @@ import { FONTS, defaultSpec, type DesignSpec, type FontKey } from "@/lib/design-
 import { fmt } from "@/lib/pricing";
 import { prepareImage } from "@/lib/client-image";
 import { JerseyPreview } from "./JerseyPreview";
+import { logoAnchor } from "@/lib/render";
 import { ModelPreviewButton } from "./ModelPreview";
 import { SignupModal } from "./AuthForm";
 
@@ -118,6 +119,18 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
     },
     [locked]
   );
+
+  // Logo placement: offsets are fractions of the fabric piece, relative to the
+  // chosen spot. Dragging on the preview sets them directly.
+  const clampOffset = (v: number) => Math.round(Math.min(0.5, Math.max(-0.5, v)) * 1000) / 1000;
+  const nudgeLogo = (dx: number, dy: number) =>
+    patchSpec((s) => ({ ...s, logo: { ...s.logo, offsetX: clampOffset((s.logo.offsetX ?? 0) + dx), offsetY: clampOffset((s.logo.offsetY ?? 0) + dy) } }));
+  const moveLogoTo = (x: number, y: number) =>
+    patchSpec((s) => {
+      const a = logoAnchor(s, view);
+      return a ? { ...s, logo: { ...s.logo, offsetX: clampOffset(x - a.x), offsetY: clampOffset(y - a.y) } } : s;
+    });
+  const lettering = (patch: Partial<DesignSpec["lettering"]>) => patchSpec((s) => ({ ...s, lettering: { ...s.lettering, ...patch } }));
 
   // Undo/redo. Every spec change is recorded; quick bursts (dragging a slider)
   // count as one step. Undoing saves the restored version right away.
@@ -449,7 +462,13 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
         </div>
 
         <div className="card grid place-items-center bg-gradient-to-b from-panel to-ink p-4">
-          <JerseyPreview spec={spec} player={player} view={view} className="h-[460px] w-full max-w-[520px]" />
+          <JerseyPreview
+            spec={spec}
+            player={player}
+            view={view}
+            className="h-[460px] w-full max-w-[520px]"
+            onLogoMove={locked ? undefined : (x, y) => moveLogoTo(x, y)}
+          />
           <div className="flex gap-2 text-xs text-muted">
             <button className={view === "front" ? "text-volt" : ""} onClick={() => setView("front")}>Front</button>·
             <button className={view === "back" ? "text-volt" : ""} onClick={() => setView("back")}>Back</button>
@@ -556,6 +575,42 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
               </select>
             </div>
           ))}
+          {(
+            [
+              ["Number size", "numberScale", 0.5, 1.6],
+              ["Name size", "nameScale", 0.5, 1.8],
+            ] as const
+          ).map(([label, key, min, max]) => (
+            <div key={key}>
+              <span className="label">{label}</span>
+              <input
+                type="range"
+                min={min}
+                max={max}
+                step={0.05}
+                value={spec.lettering[key] ?? 1}
+                onChange={(e) => lettering({ [key]: Number(e.target.value) })}
+                className="mt-3 w-full accent-[var(--color-volt)]"
+              />
+            </div>
+          ))}
+          {(
+            [
+              ["Number position", "numberOffsetY"],
+              ["Name position", "nameOffsetY"],
+            ] as const
+          ).map(([label, key]) => (
+            <div key={key}>
+              <span className="label">{label}</span>
+              <div className="flex items-center gap-1">
+                <button className="btn-ghost px-3 py-1 text-sm" aria-label={`${label}: higher`} title="Higher" disabled={locked}
+                  onClick={() => lettering({ [key]: Math.max(-0.3, Math.round(((spec.lettering[key] ?? 0) - 0.02) * 100) / 100) })}>↑</button>
+                <button className="btn-ghost px-3 py-1 text-sm" aria-label={`${label}: lower`} title="Lower" disabled={locked}
+                  onClick={() => lettering({ [key]: Math.min(0.3, Math.round(((spec.lettering[key] ?? 0) + 0.02) * 100) / 100) })}>↓</button>
+                <button className="btn-ghost px-2 py-1 text-xs" disabled={locked || !spec.lettering[key]} onClick={() => lettering({ [key]: 0 })}>Reset</button>
+              </div>
+            </div>
+          ))}
           {spec.logo.url && (
             <>
               <div>
@@ -563,7 +618,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
                 <select
                   className="input"
                   value={spec.logo.position ?? "auto"}
-                  onChange={(e) => patchSpec((s) => ({ ...s, logo: { ...s.logo, position: e.target.value as LogoPosition } }))}
+                  onChange={(e) => patchSpec((s) => ({ ...s, logo: { ...s.logo, position: e.target.value as LogoPosition, offsetX: 0, offsetY: 0 } }))}
                 >
                   {LOGO_POSITIONS.filter((p) => p !== "sleeves" || product.placements.includes("sleeve_left")).map((p) => (
                     <option key={p} value={p}>
@@ -583,6 +638,31 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
                   onChange={(e) => patchSpec((s) => ({ ...s, logo: { ...s.logo, scale: Number(e.target.value) } }))}
                   className="mt-3 w-full accent-[var(--color-volt)]"
                 />
+              </div>
+              <div>
+                <span className="label">Move logo</span>
+                <div className="flex flex-wrap items-center gap-1">
+                  {(
+                    [
+                      ["↑", "Higher", 0, -0.02],
+                      ["↓", "Lower", 0, 0.02],
+                      ["←", "Left", -0.02, 0],
+                      ["→", "Right", 0.02, 0],
+                    ] as const
+                  ).map(([icon, label, dx, dy]) => (
+                    <button key={label} className="btn-ghost px-3 py-1 text-sm" title={label} aria-label={`Move logo ${label.toLowerCase()}`} onClick={() => nudgeLogo(dx, dy)} disabled={locked}>
+                      {icon}
+                    </button>
+                  ))}
+                  <button
+                    className="btn-ghost px-2 py-1 text-xs"
+                    onClick={() => patchSpec((s) => ({ ...s, logo: { ...s.logo, offsetX: 0, offsetY: 0 } }))}
+                    disabled={locked || (!spec.logo.offsetX && !spec.logo.offsetY)}
+                  >
+                    Reset
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-muted">Or drag the logo on the jersey.</p>
               </div>
             </>
           )}
