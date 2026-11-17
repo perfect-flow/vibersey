@@ -40,6 +40,24 @@ export function isLongSleeve(spec: DesignSpec, placement: Placement) {
   return p.box[3] * p.dims.height > 0.75 * p.box[2] * p.dims.width;
 }
 
+// Where the hem stripes start on the front or back, and the unit their
+// thickness is measured in, both as fractions of the print-file height.
+//
+// The front and back are different shapes: the back of a hockey (or baseball)
+// jersey has a curved tail and is cut taller than the front. Placing the
+// stripes a fixed fraction down each piece put them lower on the back than on
+// the front, so they didn't meet at the side seams. Instead both panels use
+// the front's stripe height and thickness, measured from the point where the
+// side seam meets the hem, which is the same on both pieces.
+export function hemStripeFrame(spec: DesignSpec, placement: "front" | "back") {
+  const front = pieceFor(spec.product, "front");
+  const piece = pieceFor(spec.product, placement);
+  const [, fy, , fh] = front.box;
+  const seamEnd = (p: typeof piece) => p.hem ?? p.box[1] + p.box[3];
+  const shift = seamEnd(piece) - seamEnd(front);
+  return { top: fy + (0.8 + (spec.trim.hemStripesOffsetY ?? 0)) * fh + shift, unit: fh };
+}
+
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
@@ -142,10 +160,13 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
   const hasYokePiece = productByKey(spec.product)?.placements.includes("yoke");
   if (spec.trim.yoke && !hasYokePiece) parts.push(`<rect x="0" y="0" width="${W}" height="${(pb.y + 0.14 * pb.h) * H}" fill="${secondary}"/>`);
   if (spec.trim.hemStripes && (placement === "front" || placement === "back")) {
-    parts.push(band(0.8, 0.04, secondary), band(0.85, 0.022, accent), band(0.882, 0.04, secondary));
+    const { top, unit } = hemStripeFrame(spec, placement);
+    const hband = (from: number, height: number, fill: string) =>
+      `<rect x="0" y="${(top + from * unit) * H}" width="${W}" height="${height * unit * H}" fill="${fill}"/>`;
+    parts.push(hband(0, 0.04, secondary), hband(0.05, 0.022, accent), hband(0.082, 0.04, secondary));
   }
   if (spec.trim.sleeveStripes && isSleeve) {
-    const at = isLongSleeve(spec, placement) ? 0.66 : 0.72;
+    const at = (isLongSleeve(spec, placement) ? 0.66 : 0.72) + (spec.trim.sleeveStripesOffsetY ?? 0);
     parts.push(band(at, 0.06, secondary), band(at + 0.08, 0.035, accent));
   }
   return parts.join("");
