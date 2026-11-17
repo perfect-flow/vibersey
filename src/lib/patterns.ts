@@ -23,7 +23,7 @@ export type PatternCtx = {
 
 const f = (n: number) => (Math.round(n * 10) / 10).toString();
 const isSleeve = (p: Placement) => p === "sleeve_left" || p === "sleeve_right";
-const PLACEMENT_SALT: Record<Placement, number> = { front: 0, back: 7919, sleeve_left: 15583, sleeve_right: 27449 };
+const PLACEMENT_SALT: Record<Placement, number> = { front: 0, back: 7919, sleeve_left: 15583, sleeve_right: 27449, yoke: 38231 };
 
 // Deterministic PRNG (mulberry32), so a design always renders the same.
 export function rng(seed: number) {

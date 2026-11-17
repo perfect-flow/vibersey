@@ -9,6 +9,7 @@ import { STANDARDS, LOGO_SPOTS, DEFAULT_LOGO_POSITION, productByKey, type Layout
 import { FONTS, type DesignSpec, type Player } from "./design-spec";
 import { PROCEDURAL, texture } from "./patterns";
 import { contrast, tone } from "./color";
+import { pieceFor } from "./garments";
 
 export type RenderOptions = {
   width: number;
@@ -20,9 +21,26 @@ export type RenderOptions = {
   guides?: boolean;
   // unique prefix for element ids when several renders share one page
   idPrefix?: string;
-  // preview only: nudge/scale layout boxes to fit a slanted sleeve silhouette
-  fit?: { dx: number; scale: number };
 };
+
+// The fabric piece's box inside the print file (fractions). Layout boxes and
+// trims are placed relative to it, because everything outside it is cut away.
+type PBox = { x: number; y: number; w: number; h: number };
+function pieceBox(spec: DesignSpec, placement: Placement): PBox {
+  const [x, y, w, h] = pieceFor(spec.product, placement).box;
+  return { x, y, w, h };
+}
+const inPiece = (b: LayoutBox, pb: PBox): LayoutBox => ({
+  x: pb.x + b.x * pb.w,
+  y: pb.y + b.y * pb.h,
+  h: b.h * pb.h,
+  w: b.w !== undefined ? b.w * pb.w : undefined,
+});
+// long sleeves (hockey) are taller than wide; short sleeves are a wide cap
+export function isLongSleeve(spec: DesignSpec, placement: Placement) {
+  const p = pieceFor(spec.product, placement);
+  return p.box[3] * p.dims.height > 0.75 * p.box[2] * p.dims.width;
+}
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -111,14 +129,20 @@ function innerRing(spec: DesignSpec) {
 
 function background(spec: DesignSpec, placement: Placement, W: number, H: number, resolveImage?: RenderOptions["resolveImage"], idp = "") {
   const { primary, secondary, accent } = spec.colors;
+  // the shoulder piece: the contrasting yoke color, or the body graphic
+  if (placement === "yoke" && spec.trim.yoke) return `<rect width="${W}" height="${H}" fill="${secondary}"/>`;
   const parts: string[] = [`<rect width="${W}" height="${H}" fill="${primary}"/>`];
   const p = spec.pattern;
   const proc = PROCEDURAL[p.style];
-  if (proc) {
+  // body-shaped graphics (bands across the torso) don't belong on a separate shoulder piece
+  const bodyOnly = placement === "yoke" && ["sash", "chevron", "waves"].includes(p.style);
+  if (proc && !bodyOnly) {
     const tonal = p.tone === "tonal";
+    // drawn in the fabric piece's own box so graphics line up with the real garment
+    const gb = pieceBox(spec, placement);
     parts.push(
-      `<g opacity="${p.opacity}">${proc({
-        W, H, placement, primary,
+      `<g opacity="${p.opacity}" transform="translate(${(gb.x * W).toFixed(1)} ${(gb.y * H).toFixed(1)})">${proc({
+        W: gb.w * W, H: gb.h * H, placement, primary,
         c1: tonal ? tone(primary, 0.14) : secondary,
         c2: tonal ? tone(primary, 0.28) : accent,
         seed: p.seed ?? 1,
@@ -163,21 +187,26 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
     }
   }
   const isSleeve = placement === "sleeve_left" || placement === "sleeve_right";
-  if (spec.trim.sidePanels && !isSleeve) {
-    const pw = W * 0.1;
-    const lw = W * 0.012;
-    parts.push(`<rect x="0" y="0" width="${pw}" height="${H}" fill="${secondary}"/><rect x="${W - pw}" y="0" width="${pw}" height="${H}" fill="${secondary}"/>`);
-    parts.push(`<rect x="${pw}" y="0" width="${lw}" height="${H}" fill="${accent}"/><rect x="${W - pw - lw}" y="0" width="${lw}" height="${H}" fill="${accent}"/>`);
+  const pb = pieceBox(spec, placement);
+  const band = (from: number, height: number, fill: string) =>
+    `<rect x="0" y="${(pb.y + from * pb.h) * H}" width="${W}" height="${height * pb.h * H}" fill="${fill}"/>`;
+  if (spec.trim.sidePanels && (placement === "front" || placement === "back")) {
+    // panels down both side seams of the fabric piece, with an accent pinline
+    const pw = pb.w * 0.1 * W;
+    const lw = pb.w * 0.012 * W;
+    const x0 = pb.x * W, x1 = (pb.x + pb.w) * W;
+    parts.push(`<rect x="0" y="0" width="${x0 + pw}" height="${H}" fill="${secondary}"/><rect x="${x1 - pw}" y="0" width="${W - x1 + pw}" height="${H}" fill="${secondary}"/>`);
+    parts.push(`<rect x="${x0 + pw}" y="0" width="${lw}" height="${H}" fill="${accent}"/><rect x="${x1 - pw - lw}" y="0" width="${lw}" height="${H}" fill="${accent}"/>`);
   }
-  if (spec.trim.yoke) parts.push(`<rect x="0" y="0" width="${W}" height="${H * 0.14}" fill="${secondary}"/>`);
-  if (spec.trim.hemStripes && !isSleeve) {
-    parts.push(`<rect x="0" y="${H * 0.8}" width="${W}" height="${H * 0.035}" fill="${secondary}"/>`);
-    parts.push(`<rect x="0" y="${H * 0.845}" width="${W}" height="${H * 0.02}" fill="${accent}"/>`);
-    parts.push(`<rect x="0" y="${H * 0.875}" width="${W}" height="${H * 0.035}" fill="${secondary}"/>`);
+  // jerseys with a separate shoulder piece get the color there instead
+  const hasYokePiece = productByKey(spec.product)?.placements.includes("yoke");
+  if (spec.trim.yoke && !hasYokePiece) parts.push(`<rect x="0" y="0" width="${W}" height="${(pb.y + 0.14 * pb.h) * H}" fill="${secondary}"/>`);
+  if (spec.trim.hemStripes && (placement === "front" || placement === "back")) {
+    parts.push(band(0.8, 0.04, secondary), band(0.85, 0.022, accent), band(0.882, 0.04, secondary));
   }
   if (spec.trim.sleeveStripes && isSleeve) {
-    parts.push(`<rect x="0" y="${H * 0.66}" width="${W}" height="${H * 0.05}" fill="${secondary}"/>`);
-    parts.push(`<rect x="0" y="${H * 0.73}" width="${W}" height="${H * 0.03}" fill="${accent}"/>`);
+    const at = isLongSleeve(spec, placement) ? 0.66 : 0.72;
+    parts.push(band(at, 0.06, secondary), band(at + 0.08, 0.035, accent));
   }
   if (p.texture && p.texture !== "none") parts.push(texture(p.texture, W, H, primary, `${idp}${placement}`));
   return parts.join("");
@@ -188,26 +217,55 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
 function logoBox(spec: DesignSpec, placement: Placement): LayoutBox | undefined {
   const pos = !spec.logo.position || spec.logo.position === "auto" ? DEFAULT_LOGO_POSITION[spec.sport] : spec.logo.position;
   const spot = LOGO_SPOTS[pos];
-  const base = spot[placement];
+  const base = productByKey(spec.product)?.logoSpots?.[pos]?.[placement] ?? spot[placement];
   if (!base) return undefined;
   const k = spec.logo.scale ?? 1;
   const h = Math.min(base.h * k, 0.9);
   const w = base.w ? Math.min(base.w * k, 0.95) : undefined;
   const half = (w ?? h) / 2;
-  // spots above the team name grow downward from their top edge so they stay clear of the collar
-  const y = spot.anchorTop ? base.y - base.h / 2 + h / 2 : base.y;
-  return { x: Math.min(Math.max(base.x, half), 1 - half), y: Math.min(Math.max(y, h / 2), 1 - h / 2), h, w };
+  // spots above the team name grow downward from their top edge, which sits
+  // below this jersey's neckline
+  const top = Math.max(base.y - base.h / 2, (pieceFor(spec.product, placement).neck ?? 0) + 0.02);
+  const y = (spot.anchorTop ? top + h / 2 : base.y) + (spec.logo.offsetY ?? 0);
+  const x = base.x + (spec.logo.offsetX ?? 0);
+  return { x: Math.min(Math.max(x, half), 1 - half), y: Math.min(Math.max(y, h / 2), 1 - h / 2), h, w };
+}
+
+// Where the logo's center sits on a panel without the customer's offset, in
+// piece fractions. The builder uses it to turn a drag into an offset.
+export function logoAnchor(spec: DesignSpec, placement: Placement) {
+  const b = logoBox({ ...spec, logo: { ...spec.logo, offsetX: 0, offsetY: 0 } }, placement);
+  return b ? { x: b.x, y: b.y } : undefined;
+}
+
+// The logo's box on a panel in print-file fractions, for the builder's drag handle.
+export function logoRect(spec: DesignSpec, placement: Placement): LayoutBox | undefined {
+  const b = logoBox(spec, placement);
+  return b ? inPiece(b, pieceBox(spec, placement)) : undefined;
+}
+
+// Name and number boxes with the customer's size and height adjustments.
+function sized(b: LayoutBox | undefined, scale = 1, dy = 0): LayoutBox | undefined {
+  if (!b) return b;
+  const h = b.h * scale;
+  return { x: b.x, y: Math.min(Math.max(b.y + dy, h / 2), 1 - h / 2), h, w: b.w !== undefined ? Math.min(b.w * scale, 0.98) : undefined };
 }
 
 // Panel content without the outer <svg>, so previews can nest several panels.
 export function renderPanelInner(spec: DesignSpec, placement: Placement, o: RenderOptions): string {
   const { width: W, height: H } = o;
   const std = STANDARDS[spec.sport];
-  const raw = std.layout[placement] ?? {};
-  const fit = o.fit;
-  const adj = (b?: LayoutBox): LayoutBox | undefined =>
-    b && fit ? { x: b.x + fit.dx, y: b.y, h: b.h * fit.scale, w: b.w ? b.w * fit.scale : undefined } : b;
-  const layout = { wordmark: adj(raw.wordmark), logo: adj(logoBox(spec, placement)), number: adj(raw.number), name: adj(raw.name) };
+  const raw = productByKey(spec.product)?.layout?.[placement] ?? std.layout[placement] ?? {};
+  const pb = pieceBox(spec, placement);
+  const Lt = spec.lettering;
+  const isBody = placement === "front" || placement === "back";
+  const place = (b?: LayoutBox) => (b ? inPiece(b, pb) : undefined);
+  const layout = {
+    wordmark: place(raw.wordmark),
+    logo: place(logoBox(spec, placement)),
+    number: place(sized(raw.number, Lt.numberScale ?? 1, isBody ? Lt.numberOffsetY ?? 0 : 0)),
+    name: place(sized(raw.name, Lt.nameScale ?? 1, Lt.nameOffsetY ?? 0)),
+  };
   const L = spec.lettering;
   const isSleeve = placement === "sleeve_left" || placement === "sleeve_right";
   const els: string[] = [background(spec, placement, W, H, o.resolveImage, o.idPrefix ?? "")];

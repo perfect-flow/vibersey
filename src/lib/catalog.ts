@@ -9,10 +9,13 @@
 export const SPORTS = ["baseball", "basketball", "football", "hockey", "soccer"] as const;
 export type Sport = (typeof SPORTS)[number];
 
-export type Placement = "front" | "back" | "sleeve_left" | "sleeve_right";
+// "yoke" is the separate shoulder piece some jerseys (hockey, American
+// football) are sewn from.
+export type Placement = "front" | "back" | "sleeve_left" | "sleeve_right" | "yoke";
 
 export type LayoutBox = {
-  // normalized to the panel: 0..1 from the top-left corner
+  // normalized to the fabric piece inside the print panel (see garments.ts):
+  // 0..1 from the piece's top-left corner
   x: number; // center x
   y: number; // center y
   h: number; // text cap height / logo height as a fraction of panel height
@@ -38,8 +41,8 @@ export const STANDARDS: Record<Sport, SportStandard> = {
     label: "Baseball",
     layout: {
       front: {
-        wordmark: { x: 0.5, y: 0.33, h: 0.09, w: 0.62 },
-        number: { x: 0.36, y: 0.47, h: 0.07 },
+        wordmark: { x: 0.5, y: 0.42, h: 0.085, w: 0.62 },
+        number: { x: 0.36, y: 0.56, h: 0.065 },
       },
       back: {
         name: { x: 0.5, y: 0.2, h: 0.045, w: 0.6 },
@@ -55,8 +58,8 @@ export const STANDARDS: Record<Sport, SportStandard> = {
     label: "Basketball",
     layout: {
       front: {
-        wordmark: { x: 0.5, y: 0.285, h: 0.065, w: 0.55 },
-        number: { x: 0.5, y: 0.49, h: 0.16 },
+        wordmark: { x: 0.5, y: 0.37, h: 0.065, w: 0.6 },
+        number: { x: 0.5, y: 0.56, h: 0.17 },
       },
       back: {
         name: { x: 0.5, y: 0.2, h: 0.045, w: 0.55 },
@@ -95,8 +98,9 @@ export const STANDARDS: Record<Sport, SportStandard> = {
         name: { x: 0.5, y: 0.18, h: 0.045, w: 0.6 },
         number: { x: 0.5, y: 0.4, h: 0.24 },
       },
-      sleeve_left: { number: { x: 0.5, y: 0.35, h: 0.22, w: 0.7 } },
-      sleeve_right: { number: { x: 0.5, y: 0.35, h: 0.22, w: 0.7 } },
+      // below the shoulder piece, above the elbow stripes
+      sleeve_left: { number: { x: 0.5, y: 0.43, h: 0.17, w: 0.5 } },
+      sleeve_right: { number: { x: 0.5, y: 0.43, h: 0.17, w: 0.5 } },
     },
     numbersDefault: { front: false, back: true, sleeves: true },
     nameDefault: true,
@@ -127,9 +131,10 @@ export const STANDARDS: Record<Sport, SportStandard> = {
 export const LOGO_POSITIONS = ["auto", "above_name", "center_chest", "left_chest", "right_chest", "sleeves", "upper_back"] as const;
 export type LogoPosition = (typeof LOGO_POSITIONS)[number];
 
+// Spots marked anchorTop start just below the neckline of the actual jersey.
 export const LOGO_SPOTS: Record<Exclude<LogoPosition, "auto">, Partial<Record<Placement, LayoutBox>> & { anchorTop?: boolean }> = {
-  above_name: { front: { x: 0.5, y: 0.15, h: 0.125, w: 0.34 }, anchorTop: true },
-  center_chest: { front: { x: 0.5, y: 0.36, h: 0.26, w: 0.62 } },
+  above_name: { front: { x: 0.5, y: 0.155, h: 0.11, w: 0.3 }, anchorTop: true },
+  center_chest: { front: { x: 0.5, y: 0.34, h: 0.26, w: 0.62 } },
   left_chest: { front: { x: 0.67, y: 0.24, h: 0.13, w: 0.26 } },
   right_chest: { front: { x: 0.33, y: 0.24, h: 0.13, w: 0.26 } },
   sleeves: { sleeve_left: { x: 0.5, y: 0.4, h: 0.32, w: 0.7 }, sleeve_right: { x: 0.5, y: 0.4, h: 0.32, w: 0.7 } },
@@ -167,6 +172,9 @@ export type ProductDef = {
   // youth version teams can mix into the same order (same design, youth sizes)
   youthKey?: ProductKey;
   dashboardUrl: string;
+  // where this jersey's cut differs from the sport's usual layout
+  layout?: SportStandard["layout"];
+  logoSpots?: Partial<Record<Exclude<LogoPosition, "auto">, Partial<Record<Placement, LayoutBox>>>>;
 };
 
 const DASH = "https://www.printful.com/dashboard/custom";
@@ -199,12 +207,15 @@ export const PRODUCTS: ProductDef[] = [
   },
   {
     key: "football-american", sport: "football", label: "American football jersey", audience: "adult",
-    title: "All-Over Print American Football Jersey", printfulProductId: 0, placements: SLEEVED,
+    title: "All-Over Print American Football Jersey", printfulProductId: 0, placements: [...SLEEVED, "yoke"],
     dashboardUrl: `${DASH}/mens/all-over-shirts/all-over-print-american-football-jersey`,
   },
   {
     key: "football-boxy", sport: "football", label: "Boxy football jersey", audience: "adult",
     title: "All-Over Print Boxy Football Jersey", printfulProductId: 0, placements: SLEEVED,
+    // the front is two pieces joined by a seam across the upper chest
+    layout: { front: { wordmark: { x: 0.5, y: 0.41, h: 0.04, w: 0.4 }, number: { x: 0.5, y: 0.6, h: 0.25 } } },
+    logoSpots: { above_name: { front: { x: 0.5, y: 0.3, h: 0.065, w: 0.22 } } },
     dashboardUrl: `${DASH}/mens/t-shirts/all-over-print-boxy-football-jersey`,
   },
   {
@@ -220,7 +231,7 @@ export const PRODUCTS: ProductDef[] = [
   },
   {
     key: "hockey-recycled", sport: "hockey", label: "Recycled hockey jersey", audience: "adult",
-    title: "All-Over Print Recycled Hockey Fan Jersey", printfulProductId: 730, placements: SLEEVED,
+    title: "All-Over Print Recycled Hockey Fan Jersey", printfulProductId: 730, placements: [...SLEEVED, "yoke"],
     dashboardUrl: `${DASH}/mens/long-sleeve-shirts/all-over-print-recycled-hockey-fan-jersey`,
   },
 ];
