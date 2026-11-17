@@ -119,6 +119,47 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
     [locked]
   );
 
+  // Undo/redo. Every spec change is recorded; quick bursts (dragging a slider)
+  // count as one step. Undoing saves the restored version right away.
+  const undoStack = useRef<DesignSpec[]>([]);
+  const redoStack = useRef<DesignSpec[]>([]);
+  const lastSpec = useRef<DesignSpec | null>(null);
+  const lastPush = useRef(0);
+  const skipHistory = useRef(false);
+  const [, setHistoryTick] = useState(0);
+  useEffect(() => {
+    if (!spec) return;
+    const prev = lastSpec.current;
+    lastSpec.current = spec;
+    if (skipHistory.current || !prev || prev.product !== spec.product) {
+      skipHistory.current = false;
+      return;
+    }
+    if (JSON.stringify(prev) === JSON.stringify(spec)) return;
+    const now = Date.now();
+    if (now - lastPush.current > 800) {
+      undoStack.current.push(prev);
+      if (undoStack.current.length > 50) undoStack.current.shift();
+    }
+    lastPush.current = now;
+    redoStack.current = [];
+    setHistoryTick((t) => t + 1);
+  }, [spec]);
+
+  function travel(from: React.RefObject<DesignSpec[]>, to: React.RefObject<DesignSpec[]>) {
+    const target = from.current.pop();
+    if (!target || !spec || locked) return;
+    to.current.push(spec);
+    skipHistory.current = true;
+    lastPush.current = 0;
+    setSpec(target);
+    setHistoryTick((t) => t + 1);
+    const id = designIdRef.current;
+    if (id) api(`/api/design/${id}`, { method: "PATCH", body: JSON.stringify({ spec: target }) });
+  }
+  const undo = () => travel(undoStack, redoStack);
+  const redo = () => travel(redoStack, undoStack);
+
   async function ensureDesign(current: DesignSpec | null = spec): Promise<string | null> {
     if (designId) return designId;
     if (!current) return null;
@@ -412,6 +453,14 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
           <div className="flex gap-2 text-xs text-muted">
             <button className={view === "front" ? "text-volt" : ""} onClick={() => setView("front")}>Front</button>·
             <button className={view === "back" ? "text-volt" : ""} onClick={() => setView("back")}>Back</button>
+          </div>
+          <div className="mt-2 flex gap-2">
+            <button className="btn-ghost px-3 py-1 text-sm" onClick={undo} disabled={!undoStack.current.length || busy || locked} title="Undo the last change">
+              ↶ Undo
+            </button>
+            <button className="btn-ghost px-3 py-1 text-sm" onClick={redo} disabled={!redoStack.current.length || busy || locked} title="Redo">
+              ↷ Redo
+            </button>
           </div>
           <ModelPreviewButton className="btn-ghost mt-3" getDesignId={() => ensureDesign()} spec={spec} player={player} />
         </div>
