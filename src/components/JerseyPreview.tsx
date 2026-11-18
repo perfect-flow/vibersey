@@ -1,10 +1,11 @@
 "use client";
 
 import { useId, useMemo, useRef, useState } from "react";
+import { allGraphics, pointInPoly, resolveColor } from "@/lib/graphics";
 import { productByKey, type Placement } from "@/lib/catalog";
 import type { DesignSpec, Player } from "@/lib/design-spec";
 import { pieceFor, type Piece } from "@/lib/garments";
-import { isLongSleeve, logoRect, renderPanelInner } from "@/lib/render";
+import { isLongSleeve, renderPanelInner, selectables, type Selectable } from "@/lib/render";
 
 // Flat garment preview, built from the jersey's real cut pieces (garments.ts).
 // Each print panel is rendered with the same code as the print files, at the
@@ -96,24 +97,69 @@ function neckline(subs: Pt[][], b: ReturnType<typeof boxPx>): Pt[] | null {
 
 const poly = (pts: Pt[]) => `M${pts.map((p) => `${p.x.toFixed(0)} ${p.y.toFixed(0)}`).join("L")}`;
 
+// A change the customer makes by dragging on the jersey, measured from where
+// the drag started, in the print-file pixels of the panel it happened on.
+export type CanvasTransform =
+  | { mode: "move"; dx: number; dy: number }
+  | { mode: "scale"; factor: number }
+  | { mode: "depth"; dy: number };
+
+type DragState = {
+  id: string;
+  placement: Placement;
+  mode: "move" | "scale" | "depth";
+  el: SVGGElement;
+  start: Pt;
+  center: Pt;
+  moved: boolean;
+};
+
+const inRect = (p: Pt, r: NonNullable<Selectable["rect"]>, pad: number) =>
+  p.x >= r.x - pad && p.x <= r.x + r.w + pad && p.y >= r.y - pad && p.y <= r.y + r.h + pad;
+
+function hitTest(list: Selectable[] | undefined, p: Pt, pad: number, prefer?: string | null): string | null {
+  if (!list) return null;
+  const hits = list.filter((s) => (s.rect ? inRect(p, s.rect, pad) : s.poly?.some((poly) => pointInPoly(p, poly))));
+  if (!hits.length) return null;
+  // clicking the selected part again keeps it, so it can be dragged even under text
+  if (prefer && hits.some((h) => h.id === prefer) && !hits[0].rect) return prefer;
+  return hits[0].id;
+}
+
+function bboxOf(s: Selectable) {
+  if (s.rect) return s.rect;
+  const pts = (s.poly ?? []).flat();
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+}
+
 export function JerseyPreview({
   spec,
   player,
   view,
   className,
-  onLogoMove,
+  selected,
+  onSelect,
+  onTransform,
 }: {
   spec: DesignSpec;
   player: Player;
   view: "front" | "back";
   className?: string;
-  // drag the logo on this view; called with the drop point in piece fractions
-  onLogoMove?: (x: number, y: number) => void;
+  // canvas editing: the selected part's id ("body" for the bare jersey)
+  selected?: string | null;
+  onSelect?: (id: string | null, placement: Placement) => void;
+  // a drag on the selected part; phase "end" when the pointer is released
+  onTransform?: (id: string, placement: Placement, t: CanvasTransform, phase: "move" | "end") => void;
 }) {
   const uid = useId().replace(/:/g, "");
   const svgRef = useRef<SVGSVGElement>(null);
+  const panelRefs = useRef<Partial<Record<Placement, SVGGElement | null>>>({});
+  const drag = useRef<DragState | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [hoverLogo, setHoverLogo] = useState(false);
+  const [hover, setHover] = useState<string | null>(null);
+  const editable = !!onSelect;
 
   const g = useMemo(() => {
     const product = productByKey(spec.product);
@@ -237,9 +283,15 @@ export function JerseyPreview({
       neck,
       cx,
       viewBox: `${(bounds.x0 - pad).toFixed(0)} ${(bounds.y0 - pad).toFixed(0)} ${(bounds.x1 - bounds.x0 + 2 * pad).toFixed(0)} ${(bounds.y1 - bounds.y0 + 2.6 * pad).toFixed(0)}`,
-      logo: logoRect(spec, view),
+      // what can be clicked on each visible panel, top-most first
+      hits: (!editable ? {} : Object.fromEntries(
+        [view, ...sleeves.map((s) => s.pl), ...(yokePiece ? ["yoke" as Placement] : [])].map((pl) => {
+          const d = pieceFor(spec.product, pl).dims;
+          return [pl, selectables(spec, pl, player, d.width, d.height)];
+        })
+      )) as Partial<Record<Placement, Selectable[]>>,
     };
-  }, [spec, player, view, uid]);
+  }, [spec, player, view, uid, editable]);
 
   const { body, b } = g;
   const W = body.dims.width;
@@ -247,39 +299,173 @@ export function JerseyPreview({
   const bodyPath = `scale(${W / 1000} ${H / 1000})`;
   const stroke = b.w / 450;
   const trim = spec.colors.accent;
+  const yokeGraphic = allGraphics(spec).find((x) => x.kind === "yoke" && !x.hidden);
+  const yokeColor = yokeGraphic && yokeGraphic.kind === "yoke" ? resolveColor(spec, yokeGraphic.color) : null;
 
-  // pointer position as fractions of the body piece box
-  const toPiece = (e: React.PointerEvent) => {
-    const svg = svgRef.current;
-    const m = svg?.getScreenCTM();
-    if (!svg || !m) return null;
+  // pointer position in a panel's own print-file pixels
+  const local = (el: SVGGElement, e: React.PointerEvent): Pt | null => {
+    const m = el.getScreenCTM();
+    if (!m) return null;
     const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
-    return { u: (p.x - b.x) / b.w, v: (p.y - b.y) / b.h, fx: p.x / W, fy: p.y / H };
+    return { x: p.x, y: p.y };
   };
-  const overLogo = (q: { fx: number; fy: number } | null) => {
-    const r = g.logo;
-    if (!q || !r) return false;
-    const w = r.w ?? (r.h * H) / W;
-    return Math.abs(q.fx - r.x) <= w / 2 && Math.abs(q.fy - r.y) <= r.h / 2;
+  const padFor = (pl: Placement) => pieceFor(spec.product, pl).dims.width * 0.012;
+
+  const startDrag = (e: React.PointerEvent, pl: Placement, id: string, mode: DragState["mode"], center: Pt) => {
+    const el = panelRefs.current[pl];
+    if (!el || !onTransform) return;
+    const p = local(el, e);
+    if (!p) return;
+    svgRef.current?.setPointerCapture?.(e.pointerId);
+    drag.current = { id, placement: pl, mode, el, start: p, center, moved: false };
+    setDragging(true);
+    e.preventDefault();
+    e.stopPropagation();
   };
-  const drag = onLogoMove && g.logo && spec.logo.url
+
+  const panelHandlers = (pl: Placement) =>
+    editable
+      ? {
+          onPointerDown: (e: React.PointerEvent) => {
+            const el = panelRefs.current[pl];
+            if (!el || e.button !== 0) return;
+            const p = local(el, e);
+            if (!p) return;
+            const id = hitTest(g.hits[pl], p, padFor(pl), selected) ?? "body";
+            onSelect?.(id, pl);
+            if (id !== "body") {
+              const s = g.hits[pl]?.find((x) => x.id === id);
+              const bb = s ? bboxOf(s) : { x: p.x, y: p.y, w: 0, h: 0 };
+              startDrag(e, pl, id, "move", { x: bb.x + bb.w / 2, y: bb.y + bb.h / 2 });
+            }
+          },
+          onPointerMove: (e: React.PointerEvent) => {
+            if (drag.current) return;
+            const el = panelRefs.current[pl];
+            const p = el && local(el, e);
+            setHover(p ? hitTest(g.hits[pl], p, padFor(pl), selected) : null);
+          },
+          onPointerLeave: () => setHover(null),
+        }
+      : {};
+
+  const svgHandlers = editable
     ? {
-        onPointerDown: (e: React.PointerEvent) => {
-          if (!overLogo(toPiece(e))) return;
-          (e.target as Element).setPointerCapture?.(e.pointerId);
-          setDragging(true);
-          e.preventDefault();
-        },
         onPointerMove: (e: React.PointerEvent) => {
-          const q = toPiece(e);
-          if (dragging && q) onLogoMove(q.u, q.v);
-          else setHoverLogo(overLogo(q));
+          const d = drag.current;
+          if (!d || !onTransform) return;
+          const p = local(d.el, e);
+          if (!p) return;
+          const dx = p.x - d.start.x;
+          const dy = p.y - d.start.y;
+          if (!d.moved && Math.hypot(dx, dy) < padFor(d.placement) * 0.5) return;
+          d.moved = true;
+          if (d.mode === "move") onTransform(d.id, d.placement, { mode: "move", dx, dy }, "move");
+          else if (d.mode === "depth") onTransform(d.id, d.placement, { mode: "depth", dy }, "move");
+          else {
+            const r0 = Math.hypot(d.start.x - d.center.x, d.start.y - d.center.y) || 1;
+            const r1 = Math.hypot(p.x - d.center.x, p.y - d.center.y);
+            onTransform(d.id, d.placement, { mode: "scale", factor: r1 / r0 }, "move");
+          }
         },
-        onPointerUp: () => setDragging(false),
-        onPointerCancel: () => setDragging(false),
-        onPointerLeave: () => !dragging && setHoverLogo(false),
+        onPointerUp: () => {
+          const d = drag.current;
+          drag.current = null;
+          setDragging(false);
+          if (d?.moved && onTransform) onTransform(d.id, d.placement, { mode: "move", dx: 0, dy: 0 }, "end");
+        },
+        onPointerCancel: () => {
+          drag.current = null;
+          setDragging(false);
+        },
       }
     : {};
+
+  // selection outline and handles for one panel, in its own pixels
+  const overlay = (pl: Placement) => {
+    if (!editable) return null;
+    const list = g.hits[pl] ?? [];
+    const sel = list.filter((s) => s.id === selected);
+    const hov = hover && hover !== selected ? list.filter((s) => s.id === hover) : [];
+    const pw = pieceFor(spec.product, pl).dims.width;
+    const sw = pw / 260;
+    const hr = pw / 75;
+    const dash = `${pw / 70} ${pw / 110}`;
+    return (
+      <g style={{ pointerEvents: "none" }}>
+        {hov.map((s, i) =>
+          s.rect ? (
+            <rect key={`h${i}`} x={s.rect.x} y={s.rect.y} width={s.rect.w} height={s.rect.h} fill="none" stroke="#fff" strokeOpacity="0.6" strokeWidth={sw} strokeDasharray={dash} />
+          ) : (
+            (s.poly ?? []).map((poly, j) => <path key={`h${i}${j}`} d={`${poly.length ? poly.map((p, k) => `${k ? "L" : "M"}${p.x.toFixed(0)} ${p.y.toFixed(0)}`).join("") : ""}Z`} fill="#fff" fillOpacity="0.08" stroke="#fff" strokeOpacity="0.5" strokeWidth={sw} strokeDasharray={dash} />)
+          )
+        )}
+        {sel.map((s, i) => {
+          const bb = bboxOf(s);
+          const center = { x: bb.x + bb.w / 2, y: bb.y + bb.h / 2 };
+          const corners = s.rect ? [
+            { x: bb.x, y: bb.y },
+            { x: bb.x + bb.w, y: bb.y },
+            { x: bb.x, y: bb.y + bb.h },
+            { x: bb.x + bb.w, y: bb.y + bb.h },
+          ] : [];
+          // stripe sets and sashes resize from a handle at their right end
+          const id = s.id;
+          const g0 = id.startsWith("g:") ? allGraphics(spec).find((x) => `g:${x.id}` === id) : undefined;
+          if (g0 && (g0.kind === "stripes" || g0.kind === "sash" || g0.kind === "side_panels")) {
+            const piece = pieceFor(spec.product, pl);
+            const right = Math.min(bb.x + bb.w, (piece.box[0] + piece.box[2]) * piece.dims.width - hr * 1.5);
+            corners.push({ x: right, y: bb.y + bb.h });
+          }
+          const guide = s.guide;
+          const mid = guide && g0?.kind === "panel" && g0.edge !== "straight" && g0.edge !== "custom" ? guide.reduce((a, p) => (Math.abs(p.x - center.x) < Math.abs(a.x - center.x) ? p : a), guide[0]) : null;
+          return (
+            <g key={`s${i}`}>
+              {s.rect ? (
+                <rect x={bb.x} y={bb.y} width={bb.w} height={bb.h} fill="none" stroke="#C6FF3D" strokeWidth={sw * 1.4} strokeDasharray={dash} />
+              ) : guide ? (
+                <path d={guide.map((p, k) => `${k ? "L" : "M"}${p.x.toFixed(0)} ${p.y.toFixed(0)}`).join("")} fill="none" stroke="#C6FF3D" strokeWidth={sw * 2} strokeDasharray={dash} />
+              ) : (
+                (s.poly ?? []).map((poly, j) => <path key={j} d={`${poly.map((p, k) => `${k ? "L" : "M"}${p.x.toFixed(0)} ${p.y.toFixed(0)}`).join("")}Z`} fill="#C6FF3D" fillOpacity="0.1" stroke="#C6FF3D" strokeWidth={sw * 1.4} strokeDasharray={dash} />)
+              )}
+              {onTransform &&
+                corners.map((c, k) => (
+                  <circle
+                    key={k}
+                    cx={c.x}
+                    cy={c.y}
+                    r={hr}
+                    fill="#fff"
+                    stroke="#111"
+                    strokeWidth={sw}
+                    style={{ pointerEvents: "all", cursor: "nwse-resize" }}
+                    onPointerDown={(e) => startDrag(e, pl, s.id, "scale", center)}
+                  />
+                ))}
+              {onTransform && mid && (
+                <rect
+                  x={mid.x - hr}
+                  y={mid.y - hr}
+                  width={hr * 2}
+                  height={hr * 2}
+                  fill="#C6FF3D"
+                  stroke="#111"
+                  strokeWidth={sw}
+                  transform={`rotate(45 ${mid.x} ${mid.y})`}
+                  style={{ pointerEvents: "all", cursor: "ns-resize" }}
+                  onPointerDown={(e) => startDrag(e, pl, s.id, "depth", center)}
+                >
+                  <title>Drag to change the point</title>
+                </rect>
+              )}
+            </g>
+          );
+        })}
+      </g>
+    );
+  };
+
+  const cursor = dragging ? "grabbing" : hover ? (hover === selected ? "move" : "pointer") : undefined;
 
   return (
     <svg
@@ -288,8 +474,8 @@ export function JerseyPreview({
       className={className}
       role="img"
       aria-label={`${view} of jersey`}
-      style={{ cursor: dragging ? "grabbing" : hoverLogo ? "grab" : undefined, touchAction: dragging ? "none" : undefined }}
-      {...drag}
+      style={{ cursor, touchAction: editable ? "none" : undefined, userSelect: "none" }}
+      {...svgHandlers}
     >
       <defs>
         <clipPath id={`${uid}body`}>
@@ -318,21 +504,26 @@ export function JerseyPreview({
         </linearGradient>
       </defs>
 
+      {editable && <rect x="-100000" y="-100000" width="200000" height="200000" fill="transparent" onPointerDown={() => onSelect?.(null, view)} />}
+
       {g.sleeves.map((s) => (
         <g key={s.pl} transform={s.transform}>
-          <g clipPath={`url(#${uid}${s.pl})`}>
-            <svg x={-s.w / 2} y={0} width={s.w} height={s.h} viewBox={s.vb} preserveAspectRatio="none" overflow="hidden" dangerouslySetInnerHTML={{ __html: s.inner }} />
+          <g clipPath={`url(#${uid}${s.pl})`} {...panelHandlers(s.pl)}>
+            <svg x={-s.w / 2} y={0} width={s.w} height={s.h} viewBox={s.vb} preserveAspectRatio="none" overflow="hidden">
+              <g ref={(el) => { panelRefs.current[s.pl] = el; }} dangerouslySetInnerHTML={{ __html: s.inner }} />
+              {overlay(s.pl)}
+            </svg>
             {/* raglan sleeves run under the shoulder piece up to the neck */}
-            {s.long && g.yokeShape && spec.trim.yoke && <rect x={-s.w} y={0} width={s.w * 2} height={s.h * 0.17} fill={spec.colors.secondary} />}
-            <rect x={-s.w / 2} y={0} width={s.w} height={s.h} fill={`url(#${uid}sshade)`} />
+            {s.long && g.yokeShape && yokeColor && <rect x={-s.w} y={0} width={s.w * 2} height={s.h * 0.17} fill={yokeColor} style={{ pointerEvents: "none" }} />}
+            <rect x={-s.w / 2} y={0} width={s.w} height={s.h} fill={`url(#${uid}sshade)`} style={{ pointerEvents: "none" }} />
           </g>
-          <path d={s.clip} fill="none" stroke="#000" strokeOpacity="0.3" strokeWidth={stroke} />
+          <path d={s.clip} fill="none" stroke="#000" strokeOpacity="0.3" strokeWidth={stroke} style={{ pointerEvents: "none" }} />
         </g>
       ))}
 
       {g.yokeShape && g.yokeInner && g.yokeDims && (
         <g>
-          <g clipPath={`url(#${uid}yoke)`}>
+          <g clipPath={`url(#${uid}yoke)`} {...panelHandlers("yoke")}>
             <svg
               x={b.x - 0.1 * b.w}
               y={b.y - 0.3 * b.w}
@@ -340,18 +531,21 @@ export function JerseyPreview({
               height={b.w * 0.6}
               viewBox={`0 0 ${g.yokeDims.width} ${g.yokeDims.height}`}
               preserveAspectRatio="xMidYMid slice"
-              dangerouslySetInnerHTML={{ __html: g.yokeInner }}
-            />
+            >
+              <g ref={(el) => { panelRefs.current.yoke = el; }} dangerouslySetInnerHTML={{ __html: g.yokeInner }} />
+              {overlay("yoke")}
+            </svg>
           </g>
-          <path d={g.yokeShape} fill="none" stroke="#000" strokeOpacity="0.3" strokeWidth={stroke} />
+          <path d={g.yokeShape} fill="none" stroke="#000" strokeOpacity="0.3" strokeWidth={stroke} style={{ pointerEvents: "none" }} />
         </g>
       )}
 
-      <g clipPath={`url(#${uid}body)`}>
-        <g dangerouslySetInnerHTML={{ __html: g.bodyInner }} />
+      <g clipPath={`url(#${uid}body)`} {...panelHandlers(view)}>
+        <g ref={(el) => { panelRefs.current[view] = el; }} dangerouslySetInnerHTML={{ __html: g.bodyInner }} />
         <rect x={b.x} y={b.y} width={b.w} height={b.h} fill={`url(#${uid}shade)`} style={{ pointerEvents: "none" }} />
+        {overlay(view)}
       </g>
-      <path d={body.path} transform={bodyPath} fill="none" stroke="#000" strokeOpacity="0.3" strokeWidth={stroke} vectorEffect="non-scaling-stroke" style={{ strokeWidth: 1.5 }} />
+      <path d={body.path} transform={bodyPath} fill="none" stroke="#000" strokeOpacity="0.3" strokeWidth={stroke} vectorEffect="non-scaling-stroke" style={{ strokeWidth: 1.5, pointerEvents: "none" }} />
 
       {g.neck && (
         <path
@@ -361,20 +555,6 @@ export function JerseyPreview({
           strokeWidth={b.w * 0.022}
           strokeLinecap="round"
           strokeLinejoin="round"
-        />
-      )}
-
-      {hoverLogo && g.logo && !dragging && (
-        <rect
-          x={(g.logo.x - (g.logo.w ?? (g.logo.h * H) / W) / 2) * W}
-          y={(g.logo.y - g.logo.h / 2) * H}
-          width={(g.logo.w ?? (g.logo.h * H) / W) * W}
-          height={g.logo.h * H}
-          fill="none"
-          stroke="#fff"
-          strokeOpacity="0.8"
-          strokeDasharray={`${b.w / 80} ${b.w / 120}`}
-          strokeWidth={b.w / 300}
           style={{ pointerEvents: "none" }}
         />
       )}

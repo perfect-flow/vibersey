@@ -36,7 +36,8 @@ export function BrandBoard({
   const [saved, setSaved] = useState<Saved[]>([]);
   const [unavailable, setUnavailable] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [open, setOpen] = useState(true);
+  // a one-line strip until the customer opens it
+  const [open, setOpen] = useState(false);
 
   const loadSaved = () =>
     fetch("/api/brands")
@@ -110,20 +111,12 @@ export function BrandBoard({
 
   if (!brand) {
     return (
-      <div className="card space-y-3 p-4">
-        <div className="flex items-center justify-between">
-          <span className="font-semibold">Brand board</span>
-          <span className="text-xs text-muted">Keeps colors and logos the same on every edit</span>
-        </div>
-        <p className="text-sm text-muted">
-          No brand board yet. Tell the AI designer your colors and logo (or share an image or link) and it will build one. You can also start from this jersey.
-        </p>
-        <div className="flex flex-wrap gap-2">
+      <div className="card flex flex-wrap items-center gap-3 px-4 py-3">
+        <span className="font-semibold">Brand board</span>
+        <span className="text-xs text-muted">Tell the AI your colors and logo and it builds one, so every edit stays on-brand.</span>
+        <div className="ml-auto flex flex-wrap gap-2">
           <button className="btn-ghost px-3 py-1 text-sm" disabled={locked} onClick={() => commit((s) => ({ ...s, brand: brandFromSpec(s) }))}>
             Create from this jersey
-          </button>
-          <button className="btn-ghost px-3 py-1 text-sm" disabled={locked} onClick={onOpenLogos}>
-            Logos &amp; patches
           </button>
           {savedPicker}
         </div>
@@ -132,17 +125,31 @@ export function BrandBoard({
   }
 
   return (
-    <div className="card space-y-4 p-4">
+    <div className={`card ${open ? "space-y-4 p-4" : "px-4 py-3"}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <button className="flex items-center gap-2 font-semibold" onClick={() => setOpen(!open)} aria-expanded={open}>
           Brand board{brand.name ? `: ${brand.name}` : ""}
           <span className="text-xs text-muted">{open ? "▾" : "▸"}</span>
         </button>
-        <div className="flex gap-1">
-          {Object.values(brand.colors).map((c, i) => (
-            <span key={i} className="h-5 w-5 rounded-full border border-line" style={{ background: c }} />
-          ))}
-        </div>
+        <button className="flex items-center gap-3" onClick={() => setOpen(!open)} aria-label="Edit brand board">
+          {!open && (
+            <span className="hidden text-xs text-muted sm:inline">
+              {FONTS[brand.fonts.wordmark].label} · {FONTS[brand.fonts.number].label}
+            </span>
+          )}
+          <span className="flex gap-1">
+            {[...Object.values(brand.colors), ...brand.extras].map((c, i) => (
+              <span key={i} className="h-5 w-5 rounded-full border border-line" style={{ background: c }} />
+            ))}
+          </span>
+          {!open &&
+            [brand.logos.main, brand.logos.alternate].map((l, i) =>
+              l ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img key={i} src={l.url} alt="" className="h-7 w-7 rounded object-contain" style={checker} />
+              ) : null
+            )}
+        </button>
       </div>
       {open && (
         <>

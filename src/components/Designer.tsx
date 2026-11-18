@@ -2,22 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LOGO_POSITIONS, PRODUCTS, SPORTS, STANDARDS, productByKey, type LogoPosition, type ProductKey, type Sport } from "@/lib/catalog";
-
-const LOGO_POSITION_LABELS: Record<LogoPosition, string> = {
-  auto: "Standard spot",
-  above_name: "Above team name",
-  center_chest: "Center chest (big)",
-  left_chest: "Left chest",
-  right_chest: "Right chest",
-  sleeves: "Sleeves",
-  upper_back: "Upper back",
-};
-import { FONTS, defaultSpec, type DesignSpec, type FontKey } from "@/lib/design-spec";
+import { PRODUCTS, SPORTS, STANDARDS, productByKey, type Placement, type ProductKey, type Sport } from "@/lib/catalog";
+import { defaultSpec, type DesignSpec } from "@/lib/design-spec";
 import { fmt } from "@/lib/pricing";
 import { prepareImage } from "@/lib/client-image";
-import { JerseyPreview } from "./JerseyPreview";
-import { logoAnchor } from "@/lib/render";
+import { JerseyPreview, type CanvasTransform } from "./JerseyPreview";
+import { applyCanvasTransform } from "@/lib/canvas-edit";
+import { materialize } from "@/lib/graphics";
+import { AddMenu, ElementToolbar } from "./ElementToolbar";
 import { ModelPreviewButton } from "./ModelPreview";
 import { SignupModal } from "./AuthForm";
 import { BrandBoard } from "./BrandBoard";
@@ -173,26 +165,38 @@ export function Designer({ initialDesignId, initialProduct }: { initialDesignId?
     setSpec(next);
     return ensureDesign(next).then(() => undefined);
   };
-  // fonts are part of the brand board, so a manual change updates it too
-  const setFont = (role: "wordmark" | "number" | "name", font: FontKey) =>
-    patchSpec((s) => ({
-      ...s,
-      wordmark: role === "wordmark" ? { ...s.wordmark, font } : s.wordmark,
-      lettering: role === "wordmark" ? s.lettering : { ...s.lettering, [role === "number" ? "numberFont" : "nameFont"]: font },
-      brand: s.brand ? { ...s.brand, fonts: { ...s.brand.fonts, [role]: font } } : s.brand,
-    }));
-
-  // Logo placement: offsets are fractions of the fabric piece, relative to the
-  // chosen spot. Dragging on the preview sets them directly.
-  const clampOffset = (v: number) => Math.round(Math.min(0.5, Math.max(-0.5, v)) * 1000) / 1000;
-  const nudgeLogo = (dx: number, dy: number) =>
-    patchSpec((s) => ({ ...s, logo: { ...s.logo, offsetX: clampOffset((s.logo.offsetX ?? 0) + dx), offsetY: clampOffset((s.logo.offsetY ?? 0) + dy) } }));
-  const moveLogoTo = (x: number, y: number) =>
-    patchSpec((s) => {
-      const a = logoAnchor(s, view);
-      return a ? { ...s, logo: { ...s.logo, offsetX: clampOffset(x - a.x), offsetY: clampOffset(y - a.y) } } : s;
-    });
-  const lettering = (patch: Partial<DesignSpec["lettering"]>) => patchSpec((s) => ({ ...s, lettering: { ...s.lettering, ...patch } }));
+  // Canvas editing: the selected part, and dragging it. A drag previews live
+  // from the design as it was when the drag began, and is saved once at the end.
+  const [selected, setSelected] = useState<string | null>(null);
+  const dragStart = useRef<DesignSpec | null>(null);
+  const onCanvasTransform = (id: string, pl: Placement, t: CanvasTransform, phase: "move" | "end") => {
+    if (!spec || locked) return;
+    if (phase === "end") {
+      dragStart.current = null;
+      patchSpec((s) => s); // saves the dropped position
+      return;
+    }
+    if (!dragStart.current) dragStart.current = spec;
+    setSpec(applyCanvasTransform(dragStart.current, id, pl, t));
+  };
+  // Delete removes a selected stripe set or panel; Escape lets go
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "Escape") setSelected(null);
+      if ((e.key === "Delete" || e.key === "Backspace") && selected?.startsWith("g:")) {
+        const id = selected.slice(2);
+        patchSpec((s) => {
+          const m = materialize(s);
+          return { ...m, graphics: m.graphics.filter((g) => g.id !== id) };
+        });
+        setSelected(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected, patchSpec]);
 
   // Undo/redo. Every spec change is recorded; quick bursts (dragging a slider)
   // count as one step. Undoing saves the restored version right away.
@@ -384,7 +388,7 @@ export function Designer({ initialDesignId, initialProduct }: { initialDesignId?
     const url = await uploadImage(file, "logo");
     if (url) {
       await applyLogo({ ...spec.logo, url, source: "upload", prompt: null });
-      setNotice("Logo added. Use Logo size and Logo position below to adjust it.");
+      setNotice("Logo added. Click it on the jersey to move or resize it.");
     }
     setUploading(false);
     return url;
@@ -503,9 +507,6 @@ export function Designer({ initialDesignId, initialProduct }: { initialDesignId?
             </div>
           </div>
           <div className="flex gap-2">
-            <button className="btn-ghost" onClick={() => setView(view === "front" ? "back" : "front")}>
-              Show {view === "front" ? "back" : "front"}
-            </button>
             <button className="btn-ghost" onClick={() => setLogosOpen(true)} disabled={locked}>
               Logos &amp; patches
             </button>
@@ -518,242 +519,49 @@ export function Designer({ initialDesignId, initialProduct }: { initialDesignId?
           </div>
         </div>
 
-        <div className="card grid place-items-center bg-gradient-to-b from-panel to-ink p-4">
-          <JerseyPreview
-            spec={spec}
-            player={player}
-            view={view}
-            className="h-[460px] w-full max-w-[520px]"
-            onLogoMove={locked ? undefined : (x, y) => moveLogoTo(x, y)}
-          />
-          <div className="flex gap-2 text-xs text-muted">
-            <button className={view === "front" ? "text-volt" : ""} onClick={() => setView("front")}>Front</button>·
-            <button className={view === "back" ? "text-volt" : ""} onClick={() => setView("back")}>Back</button>
+        <div className="card relative grid gap-3 bg-gradient-to-b from-panel to-ink p-4">
+          {!locked && (
+            <div className="absolute inset-x-4 top-4 z-20">
+              {selected ? (
+                <ElementToolbar spec={spec} selected={selected} patch={patchSpec} onOpenLogos={() => setLogosOpen(true)} onDeselect={() => setSelected(null)} />
+              ) : (
+                <div className="flex items-center gap-3">
+                  <AddMenu spec={spec} patch={patchSpec} onSelect={setSelected} onOpenLogos={() => setLogosOpen(true)} />
+                  <span className="text-xs text-muted">Click any part of the jersey to edit it. Drag to move, pull a corner to resize.</span>
+                </div>
+              )}
+            </div>
+          )}
+          <div className={`grid place-items-center ${locked ? "" : "pt-12"}`}>
+            <JerseyPreview
+              spec={spec}
+              player={player}
+              view={view}
+              className="h-[520px] w-full max-w-[600px]"
+              selected={selected}
+              onSelect={locked ? undefined : (id) => setSelected(id)}
+              onTransform={locked ? undefined : onCanvasTransform}
+            />
           </div>
-          <div className="mt-2 flex gap-2">
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <div className="flex overflow-hidden rounded-lg border border-line text-sm">
+              <button className={`px-3 py-1 ${view === "front" ? "bg-volt text-ink" : "text-muted"}`} onClick={() => setView("front")}>Front</button>
+              <button className={`px-3 py-1 ${view === "back" ? "bg-volt text-ink" : "text-muted"}`} onClick={() => setView("back")}>Back</button>
+            </div>
             <button className="btn-ghost px-3 py-1 text-sm" onClick={undo} disabled={!undoStack.current.length || busy || locked} title="Undo the last change">
               ↶ Undo
             </button>
             <button className="btn-ghost px-3 py-1 text-sm" onClick={redo} disabled={!redoStack.current.length || busy || locked} title="Redo">
               ↷ Redo
             </button>
+            <ModelPreviewButton className="btn-ghost px-3 py-1 text-sm" getDesignId={() => ensureDesign()} spec={spec} player={player} />
           </div>
-          <ModelPreviewButton className="btn-ghost mt-3" getDesignId={() => ensureDesign()} spec={spec} player={player} />
         </div>
 
         {notice && <p className="text-sm text-volt">{notice}</p>}
 
         <BrandBoard spec={spec} locked={locked} commit={commit} onOpenLogos={() => setLogosOpen(true)} onNotice={setNotice} />
 
-        {/* manual controls */}
-        <div className="card grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3">
-          <div>
-            <span className="label">Player name</span>
-            <input
-              className="input"
-              value={spec.sample.name}
-              maxLength={16}
-              onChange={(e) => patchSpec((s) => ({ ...s, sample: { ...s.sample, name: e.target.value.toUpperCase() }, lettering: { ...s.lettering, showName: s.lettering.showName || e.target.value.trim() !== "" } }))}
-            />
-          </div>
-          <div>
-            <span className="label">Number</span>
-            <input
-              className="input"
-              value={spec.sample.number}
-              maxLength={3}
-              inputMode="numeric"
-              onChange={(e) => patchSpec((s) => ({ ...s, sample: { ...s.sample, number: e.target.value.replace(/\D/g, "") } }))}
-            />
-          </div>
-          <div>
-            <span className="label">Team name on chest</span>
-            <input
-              className="input"
-              value={spec.wordmark.text}
-              maxLength={30}
-              onChange={(e) => patchSpec((s) => ({ ...s, teamName: e.target.value, wordmark: { ...s.wordmark, text: e.target.value, show: e.target.value.trim() !== "" } }))}
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm text-muted">
-            <input
-              type="checkbox"
-              checked={spec.lettering.showName}
-              onChange={(e) => patchSpec((s) => ({ ...s, lettering: { ...s.lettering, showName: e.target.checked } }))}
-            />
-            Player name on back
-          </label>
-          <div>
-            <span className="label">Team name font</span>
-            <select
-              className="input"
-              value={spec.wordmark.font}
-              onChange={(e) => setFont("wordmark", e.target.value as FontKey)}
-            >
-              {Object.entries(FONTS).map(([k, f]) => (
-                <option key={k} value={k}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="sm:col-span-2 lg:col-span-3">
-            <span className="label">Colors</span>
-            <div className="flex flex-wrap gap-3">
-              {(["primary", "secondary", "accent", "text", "outline"] as const).map((k) => (
-                <label key={k} className="flex items-center gap-2 text-xs capitalize text-muted">
-                  <input
-                    type="color"
-                    value={spec.colors[k]}
-                    onChange={(e) => patchSpec((s) => ({ ...s, colors: { ...s.colors, [k]: e.target.value.toUpperCase() } }))}
-                    className="h-8 w-8 cursor-pointer rounded border border-line bg-transparent"
-                  />
-                  {k === "text" ? "letters" : k}
-                </label>
-              ))}
-            </div>
-          </div>
-          {(
-            [
-              ["Number font", "numberFont"],
-              ["Name font", "nameFont"],
-            ] as const
-          ).map(([label, key]) => (
-            <div key={key}>
-              <span className="label">{label}</span>
-              <select
-                className="input"
-                value={spec.lettering[key]}
-                onChange={(e) => setFont(key === "numberFont" ? "number" : "name", e.target.value as FontKey)}
-              >
-                {Object.entries(FONTS).map(([k, f]) => (
-                  <option key={k} value={k}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ))}
-          {(
-            [
-              ["Number size", "numberScale", 0.5, 1.6],
-              ["Name size", "nameScale", 0.5, 1.8],
-            ] as const
-          ).map(([label, key, min, max]) => (
-            <div key={key}>
-              <span className="label">{label}</span>
-              <input
-                type="range"
-                min={min}
-                max={max}
-                step={0.05}
-                value={spec.lettering[key] ?? 1}
-                onChange={(e) => lettering({ [key]: Number(e.target.value) })}
-                className="mt-3 w-full accent-[var(--color-volt)]"
-              />
-            </div>
-          ))}
-          {(
-            [
-              ["Number position", "numberOffsetY"],
-              ["Name position", "nameOffsetY"],
-            ] as const
-          ).map(([label, key]) => (
-            <div key={key}>
-              <span className="label">{label}</span>
-              <div className="flex items-center gap-1">
-                <button className="btn-ghost px-3 py-1 text-sm" aria-label={`${label}: higher`} title="Higher" disabled={locked}
-                  onClick={() => lettering({ [key]: Math.max(-0.3, Math.round(((spec.lettering[key] ?? 0) - 0.02) * 100) / 100) })}>↑</button>
-                <button className="btn-ghost px-3 py-1 text-sm" aria-label={`${label}: lower`} title="Lower" disabled={locked}
-                  onClick={() => lettering({ [key]: Math.min(0.3, Math.round(((spec.lettering[key] ?? 0) + 0.02) * 100) / 100) })}>↓</button>
-                <button className="btn-ghost px-2 py-1 text-xs" disabled={locked || !spec.lettering[key]} onClick={() => lettering({ [key]: 0 })}>Reset</button>
-              </div>
-            </div>
-          ))}
-          {spec.logo.url && (
-            <>
-              <div>
-                <span className="label">Logo position</span>
-                <select
-                  className="input"
-                  value={spec.logo.position ?? "auto"}
-                  onChange={(e) => patchSpec((s) => ({ ...s, logo: { ...s.logo, position: e.target.value as LogoPosition, offsetX: 0, offsetY: 0 } }))}
-                >
-                  {LOGO_POSITIONS.filter((p) => p !== "sleeves" || product.placements.includes("sleeve_left")).map((p) => (
-                    <option key={p} value={p}>
-                      {LOGO_POSITION_LABELS[p]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <span className="label">Logo size</span>
-                <input
-                  type="range"
-                  min={0.5}
-                  max={3}
-                  step={0.1}
-                  value={spec.logo.scale ?? 1}
-                  onChange={(e) => patchSpec((s) => ({ ...s, logo: { ...s.logo, scale: Number(e.target.value) } }))}
-                  className="mt-3 w-full accent-[var(--color-volt)]"
-                />
-              </div>
-              <div>
-                <span className="label">Move logo</span>
-                <div className="flex flex-wrap items-center gap-1">
-                  {(
-                    [
-                      ["↑", "Higher", 0, -0.02],
-                      ["↓", "Lower", 0, 0.02],
-                      ["←", "Left", -0.02, 0],
-                      ["→", "Right", 0.02, 0],
-                    ] as const
-                  ).map(([icon, label, dx, dy]) => (
-                    <button key={label} className="btn-ghost px-3 py-1 text-sm" title={label} aria-label={`Move logo ${label.toLowerCase()}`} onClick={() => nudgeLogo(dx, dy)} disabled={locked}>
-                      {icon}
-                    </button>
-                  ))}
-                  <button
-                    className="btn-ghost px-2 py-1 text-xs"
-                    onClick={() => patchSpec((s) => ({ ...s, logo: { ...s.logo, offsetX: 0, offsetY: 0 } }))}
-                    disabled={locked || (!spec.logo.offsetX && !spec.logo.offsetY)}
-                  >
-                    Reset
-                  </button>
-                </div>
-                <p className="mt-1 text-xs text-muted">Or drag the logo on the jersey.</p>
-              </div>
-            </>
-          )}
-          <div>
-            <span className="label">Logo</span>
-            <div className="flex items-center gap-2">
-              {spec.logo.url && (
-                // checkerboard so the customer can see the logo's transparency
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={spec.logo.url}
-                  alt="Current logo"
-                  className="h-10 w-10 shrink-0 rounded object-contain"
-                  style={{ background: "repeating-conic-gradient(#3a3a44 0% 25%, #23232b 0% 50%) 50% / 10px 10px" }}
-                />
-              )}
-              <label className={`btn-ghost w-full cursor-pointer ${uploading || busy ? "pointer-events-none opacity-50" : ""}`}>
-                {uploading ? "Uploading…" : spec.logo.url ? (spec.logo.source === "upload" ? "Replace logo" : "Upload your logo") : "Upload logo"}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
-                  hidden
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    e.target.value = ""; // allow picking the same file again
-                    if (f) uploadLogo(f);
-                  }}
-                />
-              </label>
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* chat + checkout */}
