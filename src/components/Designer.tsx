@@ -14,6 +14,7 @@ import { ModelPreviewButton } from "./ModelPreview";
 import { SignupModal } from "./AuthForm";
 import { BrandBoard } from "./BrandBoard";
 import { LogoBuilder } from "./LogoBuilder";
+import { ProductDetailsModal } from "./ProductDetails";
 
 type Msg = { role: "user" | "assistant"; content: string };
 type Usage = { used: number; limit: number | null; allowed: boolean };
@@ -708,6 +709,9 @@ function JerseyTypes({
   // In the phone/tablet strip, bring the selected type into view (sideways only,
   // so the page itself never scrolls).
   const strip = useRef<HTMLDivElement>(null);
+  const [details, setDetails] = useState<ProductKey | null>(null);
+  const shown = details ? productByKey(details) : undefined;
+  const pricesOf = (k?: ProductKey) => (k ? catalog.find((x) => x.key === k)?.sizes ?? [] : []);
   useEffect(() => {
     const el = strip.current;
     const btn = el?.querySelector<HTMLElement>("[aria-current=true]");
@@ -733,13 +737,14 @@ function JerseyTypes({
                 const youth = p.youthKey ? productByKey(p.youthKey) : undefined;
                 const active = p.key === current;
                 return (
-                  <button
+                  <div
                     key={p.key}
+                    className={`card relative w-56 shrink-0 transition xl:w-full ${active ? "border-volt" : "hover:border-volt/60"}`}
+                  >
+                  <button
                     onClick={() => !active && onPick(p.key)}
                     aria-current={active ? "true" : undefined}
-                    className={`card flex w-56 shrink-0 items-center gap-3 p-2 text-left transition xl:w-full ${
-                      active ? "border-volt" : "hover:border-volt/60"
-                    }`}
+                    className="flex w-full items-center gap-3 rounded-2xl p-2 pr-14 text-left"
                   >
                     <JerseyPreview spec={defaultSpec(sport, p.key)} player={{ name: "", number: "" }} view="front" className="h-12 w-12 shrink-0" />
                     <div className="min-w-0">
@@ -753,12 +758,34 @@ function JerseyTypes({
                       </div>
                     </div>
                   </button>
+                  <button
+                    onClick={() => setDetails(p.key)}
+                    className="absolute bottom-2 right-2.5 text-[11px] text-muted underline underline-offset-2 hover:text-volt"
+                    aria-label={`${p.label} details`}
+                  >
+                    Details
+                  </button>
+                  </div>
                 );
               })}
             </div>
           );
         })}
       </div>
+      {shown && (
+        <ProductDetailsModal
+          productKey={shown.key}
+          label={shown.label}
+          prices={pricesOf(shown.key)}
+          youthPrices={pricesOf(shown.youthKey)}
+          isCurrent={shown.key === current}
+          onClose={() => setDetails(null)}
+          onDesign={() => {
+            setDetails(null);
+            onPick(shown.key);
+          }}
+        />
+      )}
     </nav>
   );
 }

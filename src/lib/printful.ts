@@ -32,6 +32,17 @@ export async function pf<T = unknown>(path: string, init: RequestInit = {}): Pro
   return body.result as T;
 }
 
+// Printful's v2 API wraps responses in `data` instead of `result`.
+export async function pfV2<T = unknown>(path: string): Promise<T> {
+  const headers: Record<string, string> = { Authorization: `Bearer ${env.printfulToken()}` };
+  const store = await storeId();
+  if (store) headers["X-PF-Store-Id"] = store;
+  const res = await fetch(`${BASE}${path}`, { headers, cache: "no-store" });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`Printful ${res.status} ${path}: ${JSON.stringify(body).slice(0, 400)}`);
+  return body.data as T;
+}
+
 export type ProductRow = {
   key: ProductKey;
   sport: string;
