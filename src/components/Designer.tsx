@@ -46,13 +46,31 @@ async function api<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; s
   return { ok: res.ok, status: res.status, data };
 }
 
-export function Designer({ initialDesignId }: { initialDesignId?: string }) {
+const DEFAULT_PRODUCT: ProductKey = "hockey-recycled";
+const LAST_TYPE_KEY = "vibersey:lastType";
+
+function greeting(key: ProductKey): Msg {
+  const def = productByKey(key)!;
+  return {
+    role: "assistant",
+    content: `Let's design your ${STANDARDS[def.sport].label.toLowerCase()} jersey! Tell me your team name, colors, and any inspiration. You can also upload a logo or ask me to create one.`,
+  };
+}
+
+function isAdultProduct(key: string | undefined): key is ProductKey {
+  const p = key ? productByKey(key) : undefined;
+  return !!p && p.audience === "adult";
+}
+
+export function Designer({ initialDesignId, initialProduct }: { initialDesignId?: string; initialProduct?: string }) {
   const router = useRouter();
   const [designId, setDesignId] = useState<string | null>(initialDesignId ?? null);
-  const [spec, setSpec] = useState<DesignSpec | null>(null);
+  // A fresh visit to the home page opens the builder right away on a jersey type.
+  const startKey: ProductKey | null = initialDesignId ? null : isAdultProduct(initialProduct) ? initialProduct : DEFAULT_PRODUCT;
+  const [spec, setSpec] = useState<DesignSpec | null>(() => (startKey ? defaultSpec(productByKey(startKey)!.sport, startKey) : null));
   const [title, setTitle] = useState("Untitled jersey");
   const [locked, setLocked] = useState(false);
-  const [messages, setMessages] = useState<Msg[]>([]);
+  const [messages, setMessages] = useState<Msg[]>(() => (startKey ? [greeting(startKey)] : []));
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [usage, setUsage] = useState<Usage | null>(null);
@@ -77,6 +95,18 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
     api<{ products: CatalogProduct[] }>("/api/products").then(({ data }) => setCatalog(data.products ?? []));
   }, []);
 
+  // Reopen the home page on the jersey type picked last time (unless the link names one).
+  useEffect(() => {
+    if (initialDesignId || isAdultProduct(initialProduct)) return;
+    let last: string | null = null;
+    try {
+      last = localStorage.getItem(LAST_TYPE_KEY);
+    } catch {}
+    if (isAdultProduct(last ?? undefined) && last !== DEFAULT_PRODUCT) pickProduct(last as ProductKey);
+    // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!initialDesignId) return;
     api<{ design: { spec: DesignSpec; title: string; locked: boolean }; messages: Msg[] }>(`/api/design/${initialDesignId}`).then(
@@ -92,8 +122,12 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
 
   // Braces matter: newer browsers return a Promise from scrollIntoView, and React
   // treats any returned value as a cleanup function, which crashes the page.
+  // Scroll only the chat list (not the whole page), so the builder on the home
+  // page doesn't jump down to the chat when it first loads.
   useEffect(() => {
-    chatEnd.current?.scrollIntoView({ behavior: "smooth" });
+    const end = chatEnd.current;
+    const list = end?.parentElement;
+    if (list) list.scrollTo({ top: list.scrollHeight, behavior: "smooth" });
   }, [messages, busy]);
 
   // Save manual tweaks (debounced). These don't use up free generations.
@@ -187,15 +221,33 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
     return data.design.id;
   }
 
+  // Switch jersey type. Before the design is saved, the switch happens in place and
+  // keeps the colors, team name, logo and sample player. Once a design exists, a
+  // different type starts a new jersey (the current one stays in My designs).
   function pickProduct(key: ProductKey) {
+    try {
+      localStorage.setItem(LAST_TYPE_KEY, key);
+    } catch {}
+    if (designIdRef.current) {
+      window.location.href = `/?type=${key}`;
+      return;
+    }
     const def = productByKey(key)!;
-    setSpec(defaultSpec(def.sport, key));
-    setMessages([
-      {
-        role: "assistant",
-        content: `Let's design your ${STANDARDS[def.sport].label.toLowerCase()} jersey! Tell me your team name, colors, and any inspiration. You can also upload a logo or ask me to create one.`,
-      },
-    ]);
+    const fresh = defaultSpec(def.sport, key);
+    setSpec((prev) => {
+      if (!prev) return fresh;
+      return {
+        ...fresh,
+        teamName: prev.teamName,
+        colors: prev.colors,
+        logo: { ...prev.logo, position: "auto", offsetX: 0, offsetY: 0 },
+        wordmark: { ...fresh.wordmark, text: prev.wordmark.text, font: prev.wordmark.font },
+        sample: prev.sample,
+      };
+    });
+    setView("front");
+    setSize("");
+    setMessages((m) => (m.length <= 1 ? [greeting(key)] : m));
   }
 
   async function send(text: string) {
@@ -376,50 +428,16 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
     window.location.href = data.url;
   }
 
-  // ---- Step 1: pick a jersey -------------------------------------------------
   if (!spec) {
-    if (initialDesignId && !notice) return <div className="p-10 text-center text-muted">Loading design…</div>;
+    if (!notice) return <div className="p-10 text-center text-muted">Loading design…</div>;
     return (
-      <section className="mx-auto max-w-6xl px-4 py-10">
-        <h1 className="font-display text-6xl leading-none tracking-wide md:text-8xl">
-          Design your jersey <span className="text-volt">with AI</span>
-        </h1>
-        <p className="mt-3 max-w-2xl text-lg text-muted">
-          Pick a jersey, chat with our AI designer, and we&apos;ll print and ship it. One player or the whole team.
-        </p>
-        {notice && <p className="mt-4 text-red-400">{notice}</p>}
-        <div className="mt-8 space-y-6">
-          {SPORTS.map((sport) => (
-            <div key={sport}>
-              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wider text-muted">
-                {SPORT_EMOJI[sport]} {STANDARDS[sport].label}
-              </h2>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {PRODUCTS.filter((p) => p.sport === sport && p.audience === "adult").map((p) => {
-                  const c = catalog.find((x) => x.key === p.key);
-                  const youth = p.youthKey ? productByKey(p.youthKey) : undefined;
-                  return (
-                    <button
-                      key={p.key}
-                      onClick={() => pickProduct(p.key)}
-                      className="card flex items-center gap-4 p-4 text-left transition hover:border-volt"
-                    >
-                      <JerseyPreview spec={defaultSpec(sport, p.key)} player={{ name: "", number: "" }} view="front" className="h-20 w-20 shrink-0" />
-                      <div>
-                        <div className="font-semibold">{p.label}</div>
-                        <div className="text-sm text-muted">
-                          {c?.fromPrice ? `From ${fmt(c.fromPrice)}` : "All-over print"}
-                          {youth ? " · youth sizes too" : ""}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+      <div className="p-10 text-center">
+        <p className="text-red-400">{notice}</p>
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+        <a href="/" className="btn-ghost mt-4 inline-block">
+          Start a new jersey
+        </a>
+      </div>
     );
   }
 
@@ -434,8 +452,10 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
   const player = spec.sample;
 
   return (
-    <section className="mx-auto grid max-w-7xl gap-6 px-4 py-6 lg:grid-cols-[1fr_420px]">
-      <div className="space-y-4">
+    <section className="mx-auto grid max-w-[1600px] gap-6 px-4 py-6 lg:grid-cols-[1fr_400px] xl:grid-cols-[230px_1fr_400px]">
+      <JerseyTypes current={spec.product} catalog={catalog} startsNew={!!designId} onPick={pickProduct} />
+
+      <div className="min-w-0 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <input
@@ -807,5 +827,76 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
 
       <SignupModal open={!!signup} reason={signup ?? ""} onClose={() => setSignup(null)} next={designId ? `/design/${designId}` : "/"} />
     </section>
+  );
+}
+
+// Jersey type list: a column on the left on wide screens, a scrolling strip on
+// smaller ones.
+function JerseyTypes({
+  current,
+  catalog,
+  startsNew,
+  onPick,
+}: {
+  current: ProductKey;
+  catalog: CatalogProduct[];
+  startsNew: boolean;
+  onPick: (key: ProductKey) => void;
+}) {
+  // In the phone/tablet strip, bring the selected type into view (sideways only,
+  // so the page itself never scrolls).
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = strip.current;
+    const btn = el?.querySelector<HTMLElement>("[aria-current=true]");
+    if (!el || !btn || el.scrollWidth <= el.clientWidth) return;
+    el.scrollTo({ left: btn.offsetLeft - el.offsetLeft - 16, behavior: "smooth" });
+  }, [current]);
+  return (
+    <nav aria-label="Jersey types" className="min-w-0 lg:col-span-2 xl:col-span-1 xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold uppercase tracking-wider text-muted">Jersey type</h2>
+        {startsNew && <span className="text-xs text-muted">Picking one starts a new jersey</span>}
+      </div>
+      <div ref={strip} className="flex gap-2 overflow-x-auto pb-2 xl:flex-col xl:gap-4 xl:overflow-visible xl:pb-0">
+        {SPORTS.map((sport) => {
+          const items = PRODUCTS.filter((p) => p.sport === sport && p.audience === "adult");
+          return (
+            <div key={sport} className="flex shrink-0 gap-2 xl:flex-col xl:gap-1.5">
+              <div className="hidden text-xs font-semibold uppercase tracking-wider text-muted xl:block">
+                {SPORT_EMOJI[sport]} {STANDARDS[sport].label}
+              </div>
+              {items.map((p) => {
+                const c = catalog.find((x) => x.key === p.key);
+                const youth = p.youthKey ? productByKey(p.youthKey) : undefined;
+                const active = p.key === current;
+                return (
+                  <button
+                    key={p.key}
+                    onClick={() => !active && onPick(p.key)}
+                    aria-current={active ? "true" : undefined}
+                    className={`card flex w-56 shrink-0 items-center gap-3 p-2 text-left transition xl:w-full ${
+                      active ? "border-volt" : "hover:border-volt/60"
+                    }`}
+                  >
+                    <JerseyPreview spec={defaultSpec(sport, p.key)} player={{ name: "", number: "" }} view="front" className="h-12 w-12 shrink-0" />
+                    <div className="min-w-0">
+                      <div className={`text-sm font-semibold leading-tight ${active ? "text-volt" : ""}`}>
+                        <span className="xl:hidden">{SPORT_EMOJI[sport]} </span>
+                        {p.label}
+                      </div>
+                      <div className="truncate text-xs text-muted">
+                        {c?.fromPrice ? `From ${fmt(c.fromPrice)}` : "All-over print"}
+                        {youth ? " · youth too" : ""}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </nav>
   );
 }
