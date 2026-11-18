@@ -117,8 +117,9 @@ export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
     trim: { yoke: sport === "hockey", hemStripes: sport === "hockey", sleeveStripes: sport === "football" || sport === "hockey" },
     logo: { url: null, source: null, prompt: null, position: "auto", scale: 1, offsetX: 0, offsetY: 0 },
     wordmark: {
+      // hockey leads with a crest, so its chest name starts empty (and hidden)
       show: sport !== "hockey",
-      text: "TEAM",
+      text: sport === "hockey" ? "" : "TEAM",
       style: sport === "soccer" ? "straight" : "arch",
       font: sport === "baseball" ? "yellowtail" : "graduate",
     },

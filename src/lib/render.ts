@@ -204,6 +204,31 @@ export function logoRect(spec: DesignSpec, placement: Placement): LayoutBox | un
   return b ? inPiece(b, pieceBox(spec, placement)) : undefined;
 }
 
+function overlaps(a: LayoutBox, b: LayoutBox) {
+  return Math.abs(a.x - b.x) < ((a.w ?? a.h) + (b.w ?? b.h)) / 2 && Math.abs(a.y - b.y) < (a.h + b.h) / 2;
+}
+
+// Keep the chest team name from being printed over the logo: when the two
+// overlap, the name moves just below the logo, or above it if there's no room
+// below (hem stripes). It stays put if the new spot would hit the front
+// number. Piece fractions.
+function clearOfLogo(spec: DesignSpec, placement: Placement, wm: LayoutBox | undefined, logo: LayoutBox | undefined, avoid?: LayoutBox) {
+  if (!wm || !logo || !spec.wordmark.show || !spec.wordmark.text || !overlaps(wm, logo)) return wm;
+  const moved = moveClear(spec, placement, wm, logo);
+  return avoid && overlaps(moved, avoid) ? wm : moved;
+}
+
+function moveClear(spec: DesignSpec, placement: Placement, wm: LayoutBox, logo: LayoutBox): LayoutBox {
+  const gap = 0.025;
+  const floor = spec.trim.hemStripes && (placement === "front" || placement === "back") ? 0.76 : 0.94;
+  const ceil = (pieceFor(spec.product, placement).neck ?? 0) + 0.04;
+  const below = logo.y + logo.h / 2 + gap + wm.h / 2;
+  if (below + wm.h / 2 <= floor) return { ...wm, y: below };
+  const above = logo.y - logo.h / 2 - gap - wm.h / 2;
+  if (above - wm.h / 2 >= ceil) return { ...wm, y: above };
+  return { ...wm, y: Math.min(below, floor - wm.h / 2) };
+}
+
 // Name and number boxes with the customer's size and height adjustments.
 function sized(b: LayoutBox | undefined, scale = 1, dy = 0): LayoutBox | undefined {
   if (!b) return b;
@@ -220,10 +245,13 @@ export function renderPanelInner(spec: DesignSpec, placement: Placement, o: Rend
   const Lt = spec.lettering;
   const isBody = placement === "front" || placement === "back";
   const place = (b?: LayoutBox) => (b ? inPiece(b, pb) : undefined);
+  const logoPiece = spec.logo.url ? logoBox(spec, placement) : undefined;
+  const numberPiece = sized(raw.number, Lt.numberScale ?? 1, isBody ? Lt.numberOffsetY ?? 0 : 0);
+  const frontNumber = placement === "front" && Lt.numberFront ? numberPiece : undefined;
   const layout = {
-    wordmark: place(raw.wordmark),
-    logo: place(logoBox(spec, placement)),
-    number: place(sized(raw.number, Lt.numberScale ?? 1, isBody ? Lt.numberOffsetY ?? 0 : 0)),
+    wordmark: place(clearOfLogo(spec, placement, raw.wordmark, logoPiece, frontNumber)),
+    logo: place(logoPiece),
+    number: place(numberPiece),
     name: place(sized(raw.name, Lt.nameScale ?? 1, Lt.nameOffsetY ?? 0)),
   };
   const L = spec.lettering;
