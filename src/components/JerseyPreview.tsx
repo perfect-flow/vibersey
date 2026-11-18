@@ -4,7 +4,7 @@ import { useId, useMemo, useRef, useState } from "react";
 import { allGraphics, pointInPoly, resolveColor } from "@/lib/graphics";
 import { productByKey, type Placement } from "@/lib/catalog";
 import type { DesignSpec, Player } from "@/lib/design-spec";
-import { pieceFor, type Piece } from "@/lib/garments";
+import { crossSeams, pieceFor, type Piece } from "@/lib/garments";
 import { isLongSleeve, renderPanelInner, selectables, type Selectable } from "@/lib/render";
 
 // Flat garment preview, built from the jersey's real cut pieces (garments.ts).
@@ -71,30 +71,6 @@ function armhole(subs: Pt[][], b: ReturnType<typeof boxPx>) {
   return { S, A: fallback };
 }
 
-// The neckline as a run of outline points near the top center, if the piece has one.
-function neckline(subs: Pt[][], b: ReturnType<typeof boxPx>): Pt[] | null {
-  const cx = b.x + b.w / 2;
-  const inNeck = (p: Pt) => Math.abs(p.x - cx) < 0.22 * b.w && p.y < b.y + 0.3 * b.h;
-  for (const pts of subs) {
-    const start = pts.findIndex((p) => !inNeck(p));
-    if (start < 0) continue;
-    const ring = [...pts.slice(start), ...pts.slice(0, start)];
-    const run: Pt[] = [];
-    let best: Pt[] = [];
-    for (const p of ring) {
-      if (inNeck(p)) run.push(p);
-      else {
-        if (run.length > best.length) best = [...run];
-        run.length = 0;
-      }
-    }
-    if (run.length > best.length) best = [...run];
-    // a real neckline dips below the top edge
-    if (best.length >= 3 && Math.max(...best.map((p) => p.y)) - b.y > 0.04 * b.h) return best;
-  }
-  return null;
-}
-
 const poly = (pts: Pt[]) => `M${pts.map((p) => `${p.x.toFixed(0)} ${p.y.toFixed(0)}`).join("L")}`;
 
 // A change the customer makes by dragging on the jersey, measured from where
@@ -103,6 +79,9 @@ export type CanvasTransform =
   | { mode: "move"; dx: number; dy: number }
   | { mode: "scale"; factor: number }
   | { mode: "depth"; dy: number };
+
+// parts that snap to the center line when dragged
+const SNAP_IDS = new Set(["logo", "wordmark", "number", "name"]);
 
 type DragState = {
   id: string;
@@ -159,6 +138,7 @@ export function JerseyPreview({
   const drag = useRef<DragState | null>(null);
   const [dragging, setDragging] = useState(false);
   const [hover, setHover] = useState<string | null>(null);
+  const [snapped, setSnapped] = useState(false);
   const editable = !!onSelect;
 
   const g = useMemo(() => {
@@ -266,8 +246,6 @@ export function JerseyPreview({
       ];
       pts.forEach(grow);
       yokeShape = `${poly(pts)}Z`;
-    } else {
-      neck = neckline(subs, b);
     }
 
     const yokePiece = yoked ? pieceFor(spec.product, "yoke") : null;
@@ -298,7 +276,8 @@ export function JerseyPreview({
   const H = body.dims.height;
   const bodyPath = `scale(${W / 1000} ${H / 1000})`;
   const stroke = b.w / 450;
-  const trim = spec.colors.accent;
+  const collar = spec.collar?.color ?? "accent";
+  const collarColor = collar === "none" ? null : resolveColor(spec, collar);
   const yokeGraphic = allGraphics(spec).find((x) => x.kind === "yoke" && !x.hidden);
   const yokeColor = yokeGraphic && yokeGraphic.kind === "yoke" ? resolveColor(spec, yokeGraphic.color) : null;
 
@@ -310,6 +289,10 @@ export function JerseyPreview({
     return { x: p.x, y: p.y };
   };
   const padFor = (pl: Placement) => pieceFor(spec.product, pl).dims.width * 0.012;
+  const centerX = (pl: Placement) => {
+    const p = pieceFor(spec.product, pl);
+    return (p.box[0] + p.box[2] / 2) * p.dims.width;
+  };
 
   const startDrag = (e: React.PointerEvent, pl: Placement, id: string, mode: DragState["mode"], center: Pt) => {
     const el = panelRefs.current[pl];
@@ -360,7 +343,13 @@ export function JerseyPreview({
           const dy = p.y - d.start.y;
           if (!d.moved && Math.hypot(dx, dy) < padFor(d.placement) * 0.5) return;
           d.moved = true;
-          if (d.mode === "move") onTransform(d.id, d.placement, { mode: "move", dx, dy }, "move");
+          if (d.mode === "move") {
+            // snap to the center line of the piece
+            const cxp = centerX(d.placement);
+            const snap = SNAP_IDS.has(d.id) && Math.abs(d.center.x + dx - cxp) < padFor(d.placement) * 1.2;
+            setSnapped(snap);
+            onTransform(d.id, d.placement, { mode: "move", dx: snap ? cxp - d.center.x : dx, dy }, "move");
+          }
           else if (d.mode === "depth") onTransform(d.id, d.placement, { mode: "depth", dy }, "move");
           else {
             const r0 = Math.hypot(d.start.x - d.center.x, d.start.y - d.center.y) || 1;
@@ -372,6 +361,7 @@ export function JerseyPreview({
           const d = drag.current;
           drag.current = null;
           setDragging(false);
+          setSnapped(false);
           if (d?.moved && onTransform) onTransform(d.id, d.placement, { mode: "move", dx: 0, dy: 0 }, "end");
         },
         onPointerCancel: () => {
@@ -391,8 +381,23 @@ export function JerseyPreview({
     const sw = pw / 260;
     const hr = pw / 75;
     const dash = `${pw / 70} ${pw / 110}`;
+    const piece = pieceFor(spec.product, pl);
+    const d = drag.current;
+    const guides = dragging && d && d.placement === pl && d.mode === "move" && SNAP_IDS.has(d.id);
+    const pb = { x: piece.box[0] * piece.dims.width, y: piece.box[1] * piece.dims.height, w: piece.box[2] * piece.dims.width, h: piece.box[3] * piece.dims.height };
     return (
       <g style={{ pointerEvents: "none" }}>
+        {guides && (
+          <>
+            {/* seams: names and numbers can't sit here, anything else risks being sewn in */}
+            {crossSeams(spec.product, pl).map(([s0, s1], i) => {
+              const y0 = pb.y + Math.max(0, s0) * pb.h;
+              const y1 = pb.y + s1 * pb.h;
+              return <rect key={`seam${i}`} x={pb.x} y={y0} width={pb.w} height={Math.max(0, y1 - y0)} fill="#FF4D4D" fillOpacity="0.28" stroke="#FF4D4D" strokeWidth={sw} strokeDasharray={dash} />;
+            })}
+            <line x1={pb.x + pb.w / 2} x2={pb.x + pb.w / 2} y1={pb.y} y2={pb.y + pb.h} stroke={snapped ? "#C6FF3D" : "#fff"} strokeOpacity={snapped ? 1 : 0.55} strokeWidth={sw * (snapped ? 1.6 : 1)} strokeDasharray={snapped ? undefined : dash} />
+          </>
+        )}
         {hov.map((s, i) =>
           s.rect ? (
             <rect key={`h${i}`} x={s.rect.x} y={s.rect.y} width={s.rect.w} height={s.rect.h} fill="none" stroke="#fff" strokeOpacity="0.6" strokeWidth={sw} strokeDasharray={dash} />
@@ -547,16 +552,22 @@ export function JerseyPreview({
       </g>
       <path d={body.path} transform={bodyPath} fill="none" stroke="#000" strokeOpacity="0.3" strokeWidth={stroke} vectorEffect="non-scaling-stroke" style={{ strokeWidth: 1.5, pointerEvents: "none" }} />
 
+      {/* the separate shoulder piece is drawn simplified, so its collar is too
+          (other jerseys show the collar printed on the body piece) */}
       {g.neck && (
         <path
           d={poly(g.neck)}
           fill="none"
-          stroke={trim}
+          stroke={collarColor ?? yokeColor ?? spec.colors.primary}
           strokeWidth={b.w * 0.022}
           strokeLinecap="round"
           strokeLinejoin="round"
-          style={{ pointerEvents: "none" }}
+          style={editable ? { cursor: "pointer" } : { pointerEvents: "none" }}
+          onPointerDown={editable ? (e) => { e.stopPropagation(); onSelect?.("collar", view); } : undefined}
         />
+      )}
+      {g.neck && editable && selected === "collar" && (
+        <path d={poly(g.neck)} fill="none" stroke="#C6FF3D" strokeWidth={b.w * 0.006} strokeDasharray={`${b.w / 70} ${b.w / 110}`} style={{ pointerEvents: "none" }} />
       )}
     </svg>
   );

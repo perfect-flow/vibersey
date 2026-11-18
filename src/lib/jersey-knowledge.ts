@@ -17,10 +17,12 @@ export const DESIGN_PRINCIPLES = `How pro jerseys are designed (follow these lik
 export const GRAPHICS_GUIDE = `Jersey graphics (spec.graphics): the body treatment is a list of vector parts drawn in order (later parts on top). Colors are a color ROLE name ("primary", "secondary", "accent", "text", "outline") or a "#RRGGBB" hex. Prefer roles so team kits and brand changes recolor the jersey. Coordinates are fractions of the fabric piece: x 0 = left side seam, 1 = right side seam; y 0 = top of the body piece, 1 = the hem. Give every part a short unique id. Each part may have hidden: true.
 - panel: a body region split off by a shaped edge. edge: straight | chevron | diagonal | double_chevron | star_point | wave | zigzag | custom. side: "below" (fill under the edge, the usual choice) or "above". y: height of the edge at the body's center (0.35-0.65 is typical). depth: shape amplitude (positive = the center is higher than the sides, a ^ point; negative = a V; for diagonal it is the tilt, left-to-right drop). star_point = a center point rising between two valleys with the sides high, the classic 90s star cut. custom: points [[x,y],...] from x=0 to x=1 to trace any edge you see in an inspiration image (up to 16 points). color: the fill. trim: outlined edging from the fill outward, e.g. [{"color":"accent","width":0.02},{"color":"text","width":0.012}]. front (true/false), back ("same" mirrored shape, "straight" at the side height, or "none"), sleeves (true: carry the fill onto both forearms as a straight band from sleeveY, with the same trim), sleeveY (0.5-0.75).
 - stripes: horizontal stripe set. area "body" (around the torso; drawn at the same height on front and back so they meet at the side seams) or "sleeves" (around both arms). y: top of the set (body hem stripes ~0.76-0.84, chest band ~0.3-0.45; long hockey sleeves ~0.6-0.7, short sleeves ~0.65-0.8). bands: [{color, width, gap}] top to bottom. front/back booleans for body sets.
-- yoke: contrasting shoulders. On hockey and American football jerseys it colors the separate shoulder piece (trim then becomes piping on the seam below it). On others: depth (0.1-0.25), shape straight | curved | pointed, trim along its lower edge, sleeves true to color the sleeve caps.
-- sash: diagonal band across the front: from (center height at the left side) and to (at the right side), width (0.06-0.2), color, trim, back true/false.
+- yoke (shown to the customer as "Shoulders"): contrasting shoulders. On hockey and American football jerseys it colors the separate shoulder piece (trim then becomes piping just below the seam; depth and shape do nothing there). On others: depth (0.1-0.25), shape straight | curved | pointed, trim along its lower edge, sleeves true to color the sleeve caps.
+- sash: diagonal band across the front: from (center height at the left side) and to (at the right side), width (0.06-0.2), color, trim, back (true: it wraps around the back, mirrored, so it meets at the side seams; false stops it at the seams).
 - side_panels: vertical panels down both sides: width (fraction of body width, 0.08-0.2), top (where they start, ~0.15-0.3), taper (0-1), color, trim, back true/false.
-- pattern.style (solid, stripes, pinstripes, hoops, gradient) is the base fill under the graphics. Usually "solid".`;
+- pattern.style (solid, stripes, pinstripes, hoops, gradient, tie_dye, camo) is the all-over base under the graphics, printed across every panel. Usually "solid". gradient, tie_dye and camo use pattern.colors (2-5 color roles or hex; empty = the body and second colors).
+- Seams: every piece loses about half an inch at its edges when sewn. On the boxy football jersey the front and back are cut in two with a seam across the upper chest; on hockey and American football jerseys the body is sewn to a separate shoulder piece. Names and numbers are kept off those seams automatically; keep logos and the team name clear of them too.
+- Front and back meet at the side seams: a panel's back "same" mirrors the cut and "straight" runs straight between the two side heights, so both always line up.`;
 
 // Proven starting points, in role colors.
 const R = (g: Record<string, unknown>) => g as unknown as Graphic;
@@ -52,7 +54,7 @@ export const RECIPES: { name: string; when: string; graphics: Graphic[] }[] = [
   {
     name: "Diagonal sash",
     when: "soccer/throwback, asymmetric energy",
-    graphics: [R({ id: "sash", kind: "sash", from: 0.12, to: 0.82, width: 0.14, color: "secondary", trim: [{ color: "accent", width: 0.012 }], back: false })],
+    graphics: [R({ id: "sash", kind: "sash", from: 0.12, to: 0.82, width: 0.14, color: "secondary", trim: [{ color: "accent", width: 0.012 }], back: true })],
   },
   {
     name: "Lightning cut",

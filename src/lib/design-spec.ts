@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GraphicsSchema, isLongSleevePiece, type Graphic } from "./graphics";
+import { ColorRef, GraphicsSchema, isLongSleevePiece, type Graphic } from "./graphics";
 import { SPORTS, STANDARDS, PRODUCTS, LOGO_POSITIONS, PATCH_POSITIONS, defaultProduct, type Sport, type ProductKey } from "./catalog";
 
 // Fonts bundled in /public/fonts. The same files are used for the browser
@@ -29,6 +29,21 @@ export type FontKey = keyof typeof FONTS;
 const fontKeys = Object.keys(FONTS) as [FontKey, ...FontKey[]];
 
 const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+
+export const PATTERN_STYLES = ["solid", "stripes", "pinstripes", "hoops", "gradient", "tie_dye", "camo", "artwork"] as const;
+export type PatternStyle = (typeof PATTERN_STYLES)[number];
+export const PATTERN_LABELS: Record<PatternStyle, string> = {
+  solid: "Solid",
+  stripes: "Stripes",
+  pinstripes: "Pinstripes",
+  hoops: "Hoops",
+  gradient: "Gradient",
+  tie_dye: "Tie-dye",
+  camo: "Camo",
+  artwork: "AI texture",
+};
+// styles that use the pattern's own color list
+export const MULTI_COLOR_PATTERNS: PatternStyle[] = ["gradient", "tie_dye", "camo"];
 
 const ColorsSchema = z.object({
   primary: hex, // body
@@ -99,12 +114,18 @@ export const DesignSpecSchema = z.object({
   teamName: z.string().max(40).default(""),
   colors: ColorsSchema,
   pattern: z.object({
-    style: z.enum(["solid", "stripes", "pinstripes", "hoops", "gradient", "artwork"]),
+    // the base fill under the graphics, printed over the whole jersey
+    style: z.enum(PATTERN_STYLES),
+    // the pattern's colors (gradient top to bottom, tie-dye and camo colors);
+    // empty means the body and second colors
+    colors: z.array(ColorRef).max(5).default([]),
     // AI-generated, text-free background art (style === "artwork")
     artworkUrl: z.string().url().nullable().default(null),
     artworkPrompt: z.string().nullable().default(null),
     opacity: z.number().min(0).max(1).default(1),
   }),
+  // the collar: a band of color printed around the neckline
+  collar: z.object({ color: z.union([ColorRef, z.literal("none")]).default("accent") }).default({ color: "accent" }),
   // the jersey's vector parts: panels, stripes, yoke, sash, side panels (graphics.ts)
   graphics: GraphicsSchema.default([]),
   // older designs' on/off trim; new designs use graphics (see legacyGraphics)
@@ -181,7 +202,8 @@ export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
       text: "#FFFFFF",
       outline: "#E63946",
     },
-    pattern: { style: sport === "baseball" ? "pinstripes" : "solid", artworkUrl: null, artworkPrompt: null, opacity: 1 },
+    pattern: { style: sport === "baseball" ? "pinstripes" : "solid", colors: [], artworkUrl: null, artworkPrompt: null, opacity: 1 },
+    collar: { color: "accent" },
     graphics: defaultGraphics(sport, product ?? defaultProduct(sport).key),
     trim: { yoke: false, hemStripes: false, sleeveStripes: false },
     logo: { url: null, source: null, prompt: null, position: "auto", scale: 1, offsetX: 0, offsetY: 0 },

@@ -10,6 +10,7 @@ import { JerseyPreview, type CanvasTransform } from "./JerseyPreview";
 import { applyCanvasTransform } from "@/lib/canvas-edit";
 import { materialize } from "@/lib/graphics";
 import { AddMenu, ElementToolbar } from "./ElementToolbar";
+import { SeamWarnings } from "./SeamWarnings";
 import { ModelPreviewButton } from "./ModelPreview";
 import { SignupModal } from "./AuthForm";
 import { BrandBoard } from "./BrandBoard";
@@ -544,6 +545,16 @@ export function Designer({ initialDesignId, initialProduct }: { initialDesignId?
               onTransform={locked ? undefined : onCanvasTransform}
             />
           </div>
+          {!locked && (
+            <SeamWarnings
+              spec={spec}
+              player={player}
+              onShow={(id, pl) => {
+                if (pl === "front" || pl === "back") setView(pl);
+                setSelected(id);
+              }}
+            />
+          )}
           <div className="flex flex-wrap items-center justify-center gap-2">
             <div className="flex overflow-hidden rounded-lg border border-line text-sm">
               <button className={`px-3 py-1 ${view === "front" ? "bg-volt text-ink" : "text-muted"}`} onClick={() => setView("front")}>Front</button>

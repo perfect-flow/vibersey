@@ -63,7 +63,7 @@ export const STANDARDS: Record<Sport, SportStandard> = {
       },
       back: {
         name: { x: 0.5, y: 0.2, h: 0.045, w: 0.55 },
-        number: { x: 0.5, y: 0.4, h: 0.22 },
+        number: { x: 0.5, y: 0.4, h: 0.22, w: 0.72 },
       },
     },
     numbersDefault: { front: true, back: true, sleeves: false },
@@ -289,6 +289,8 @@ export const PRODUCTS: ProductDef[] = [
   {
     key: "basketball-youth", sport: "basketball", label: "Youth basketball jersey", audience: "youth",
     title: "All-Over Print Youth Recycled Basketball Jersey", printfulProductId: 0, placements: TANK,
+    // the youth tank is narrow at the armholes, so the back number sits a bit lower
+    layout: { back: { name: { x: 0.5, y: 0.2, h: 0.045, w: 0.55 }, number: { x: 0.5, y: 0.45, h: 0.2, w: 0.66 } } },
     dashboardUrl: `${DASH}/kids-teen/all-over-shirts/all-over-print-youth-recycled-basketball-jersey`,
   },
   {
@@ -300,8 +302,13 @@ export const PRODUCTS: ProductDef[] = [
     key: "football-boxy", sport: "football", label: "Boxy football jersey", audience: "adult",
     title: "All-Over Print Boxy Football Jersey", printfulProductId: 0, placements: SLEEVED,
     // the front is two pieces joined by a seam across the upper chest
-    layout: { front: { wordmark: { x: 0.5, y: 0.41, h: 0.04, w: 0.4 }, number: { x: 0.5, y: 0.6, h: 0.25 } } },
-    logoSpots: { above_name: { front: { x: 0.5, y: 0.3, h: 0.065, w: 0.22 } } },
+    // (the back is cut in two the same way), so numbers sit below it
+    layout: {
+      front: { wordmark: { x: 0.5, y: 0.425, h: 0.04, w: 0.4 }, number: { x: 0.5, y: 0.6, h: 0.25 } },
+      back: { name: { x: 0.5, y: 0.15, h: 0.045, w: 0.6 }, number: { x: 0.5, y: 0.53, h: 0.28 } },
+    },
+    // a small crest on the upper part, between the neck and the chest seam
+    logoSpots: { above_name: { front: { x: 0.5, y: 0.287, h: 0.05, w: 0.17 } } },
     dashboardUrl: `${DASH}/mens/t-shirts/all-over-print-boxy-football-jersey`,
   },
   {
