@@ -219,7 +219,13 @@ function SizeGrid({ t, prices, youth }: { t: SizeTable; prices: Prices; youth: b
         {t.unit && t.unit !== "none" ? ` (${t.unit})` : ""}
       </h4>
       {t.description && <p className="mb-2 whitespace-pre-line text-xs text-muted">{t.description}</p>}
-      <div className="overflow-x-auto rounded-lg border border-line">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+      {t.image && (
+        // the diagram explains the lettered rows (A, B, ...)
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={t.image} alt={`${t.title} diagram`} className="w-40 shrink-0 self-center rounded-lg bg-white p-2 sm:self-start" loading="lazy" />
+      )}
+      <div className="min-w-0 flex-1 overflow-x-auto rounded-lg border border-line">
         <table className="w-full min-w-max text-left text-xs">
           <thead className="bg-ink/60 text-muted">
             <tr>
@@ -257,6 +263,7 @@ function SizeGrid({ t, prices, youth }: { t: SizeTable; prices: Prices; youth: b
             )}
           </tbody>
         </table>
+      </div>
       </div>
     </div>
   );
