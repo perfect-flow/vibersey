@@ -13,7 +13,7 @@ export const env = {
   supabaseServiceKey: () => req("SUPABASE_SERVICE_ROLE_KEY"),
   openrouterKey: () => req("OPENROUTER_API_KEY"),
   // Chat model that turns the conversation into a structured jersey spec.
-  chatModel: () => process.env.OPENROUTER_CHAT_MODEL ?? "anthropic/claude-sonnet-4.5",
+  chatModel: () => process.env.OPENROUTER_CHAT_MODEL ?? "anthropic/claude-opus-5.5",
   // Image model for text-free artwork and logos.
   imageModel: () => process.env.OPENROUTER_IMAGE_MODEL ?? "google/gemini-2.5-flash-image",
   printfulToken: () => req("PRINTFUL_API_TOKEN"),

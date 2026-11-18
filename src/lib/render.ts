@@ -8,6 +8,7 @@
 import { STANDARDS, LOGO_SPOTS, DEFAULT_LOGO_POSITION, PATCH_SPOTS, PATCH_SPOT_OVERRIDES, YOKE_PATCH_SPOTS, DEFAULT_PATCH_POSITION, productByKey, type LayoutBox, type Placement, type PatchKind, type PatchPosition } from "./catalog";
 import { FONTS, type DesignSpec, type Player } from "./design-spec";
 import { pieceFor } from "./garments";
+import { allGraphics, graphicGeometry, renderGraphics } from "./graphics";
 
 export type RenderOptions = {
   width: number;
@@ -38,24 +39,6 @@ const inPiece = (b: LayoutBox, pb: PBox): LayoutBox => ({
 export function isLongSleeve(spec: DesignSpec, placement: Placement) {
   const p = pieceFor(spec.product, placement);
   return p.box[3] * p.dims.height > 0.75 * p.box[2] * p.dims.width;
-}
-
-// Where the hem stripes start on the front or back, and the unit their
-// thickness is measured in, both as fractions of the print-file height.
-//
-// The front and back are different shapes: the back of a hockey (or baseball)
-// jersey has a curved tail and is cut taller than the front. Placing the
-// stripes a fixed fraction down each piece put them lower on the back than on
-// the front, so they didn't meet at the side seams. Instead both panels use
-// the front's stripe height and thickness, measured from the point where the
-// side seam meets the hem, which is the same on both pieces.
-export function hemStripeFrame(spec: DesignSpec, placement: "front" | "back") {
-  const front = pieceFor(spec.product, "front");
-  const piece = pieceFor(spec.product, placement);
-  const [, fy, , fh] = front.box;
-  const seamEnd = (p: typeof piece) => p.hem ?? p.box[1] + p.box[3];
-  const shift = seamEnd(piece) - seamEnd(front);
-  return { top: fy + (0.8 + (spec.trim.hemStripesOffsetY ?? 0)) * fh + shift, unit: fh };
 }
 
 const esc = (s: string) =>
@@ -90,8 +73,9 @@ function textEl(opts: {
   stroke: string;
   outline: number;
   arch?: boolean;
+  diagonal?: boolean;
 }) {
-  const { id, text, font, box, W, H, fill, stroke, outline, arch } = opts;
+  const { id, text, font, box, W, H, fill, stroke, outline, arch, diagonal } = opts;
   if (!text) return "";
   const f = FONTS[font];
   const size = fitFontSize(text, font, box, W, H);
@@ -101,6 +85,10 @@ function textEl(opts: {
   const common = `font-family="${f.family}" font-size="${size.toFixed(1)}"${
     "weight" in f ? ` font-weight="${f.weight}"` : ""
   }${"italic" in f ? ` font-style="italic"` : ""} fill="${fill}" stroke="${stroke}" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round" paint-order="stroke" text-anchor="middle"`;
+  if (diagonal) {
+    // a rising slant across the chest, like a classic script wordmark
+    return `<text x="${cx.toFixed(1)}" y="${baseline.toFixed(1)}" transform="rotate(-9 ${cx.toFixed(1)} ${(box.y * H).toFixed(1)})" ${common}>${esc(text)}</text>`;
+  }
   if (!arch) {
     return `<text x="${cx.toFixed(1)}" y="${baseline.toFixed(1)}" ${common}>${esc(text)}</text>`;
   }
@@ -112,9 +100,7 @@ function textEl(opts: {
 }
 
 function background(spec: DesignSpec, placement: Placement, W: number, H: number, resolveImage?: RenderOptions["resolveImage"], idp = "") {
-  const { primary, secondary, accent } = spec.colors;
-  // the shoulder piece: the contrasting yoke color, or the body graphic
-  if (placement === "yoke" && spec.trim.yoke) return `<rect width="${W}" height="${H}" fill="${secondary}"/>`;
+  const { primary, secondary } = spec.colors;
   const parts: string[] = [`<rect width="${W}" height="${H}" fill="${primary}"/>`];
   const p = spec.pattern;
   switch (p.style) {
@@ -152,23 +138,8 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
       break;
     }
   }
-  const isSleeve = placement === "sleeve_left" || placement === "sleeve_right";
-  const pb = pieceBox(spec, placement);
-  const band = (from: number, height: number, fill: string) =>
-    `<rect x="0" y="${(pb.y + from * pb.h) * H}" width="${W}" height="${height * pb.h * H}" fill="${fill}"/>`;
-  // jerseys with a separate shoulder piece get the color there instead
-  const hasYokePiece = productByKey(spec.product)?.placements.includes("yoke");
-  if (spec.trim.yoke && !hasYokePiece) parts.push(`<rect x="0" y="0" width="${W}" height="${(pb.y + 0.14 * pb.h) * H}" fill="${secondary}"/>`);
-  if (spec.trim.hemStripes && (placement === "front" || placement === "back")) {
-    const { top, unit } = hemStripeFrame(spec, placement);
-    const hband = (from: number, height: number, fill: string) =>
-      `<rect x="0" y="${(top + from * unit) * H}" width="${W}" height="${height * unit * H}" fill="${fill}"/>`;
-    parts.push(hband(0, 0.04, secondary), hband(0.05, 0.022, accent), hband(0.082, 0.04, secondary));
-  }
-  if (spec.trim.sleeveStripes && isSleeve) {
-    const at = (isLongSleeve(spec, placement) ? 0.66 : 0.72) + (spec.trim.sleeveStripesOffsetY ?? 0);
-    parts.push(band(at, 0.06, secondary), band(at + 0.08, 0.035, accent));
-  }
+  // yoke, panels, stripes, sash, side panels (graphics.ts)
+  parts.push(renderGraphics(spec, placement, W, H, backNumberBand(spec, placement, H)));
   return parts.join("");
 }
 
@@ -297,7 +268,11 @@ function clearOfLogo(spec: DesignSpec, placement: Placement, wm: LayoutBox | und
 
 function moveClear(spec: DesignSpec, placement: Placement, wm: LayoutBox, logo: LayoutBox): LayoutBox {
   const gap = 0.025;
-  const floor = spec.trim.hemStripes && (placement === "front" || placement === "back") ? 0.76 : 0.94;
+  // stay above any stripes around the hem
+  const stripeTops = allGraphics(spec)
+    .filter((g) => g.kind === "stripes" && g.area === "body" && !g.hidden && g.y > 0.5)
+    .map((g) => (g.kind === "stripes" ? g.y : 1));
+  const floor = placement === "front" || placement === "back" ? Math.min(0.94, ...stripeTops.map((y) => y - 0.02)) : 0.94;
   const ceil = (pieceFor(spec.product, placement).neck ?? 0) + 0.04;
   const below = logo.y + logo.h / 2 + gap + wm.h / 2;
   if (below + wm.h / 2 <= floor) return { ...wm, y: below };
@@ -313,24 +288,42 @@ function sized(b: LayoutBox | undefined, scale = 1, dy = 0): LayoutBox | undefin
   return { x: b.x, y: Math.min(Math.max(b.y + dy, h / 2), 1 - h / 2), h, w: b.w !== undefined ? Math.min(b.w * scale, 0.98) : undefined };
 }
 
+// Where the team name, logo, number and name sit on a panel, in piece
+// fractions, with the customer's size and position adjustments applied.
+export function panelLayout(spec: DesignSpec, placement: Placement) {
+  const std = STANDARDS[spec.sport];
+  const raw = productByKey(spec.product)?.layout?.[placement] ?? std.layout[placement] ?? {};
+  const Lt = spec.lettering;
+  const body = placement === "front" || placement === "back";
+  const logoPiece = spec.logo.url ? logoBox(spec, placement) : undefined;
+  const numberPiece = shift(sized(raw.number, Lt.numberScale ?? 1, body ? Lt.numberOffsetY ?? 0 : 0), body ? Lt.numberOffsetX ?? 0 : 0);
+  const frontNumber = placement === "front" && Lt.numberFront ? numberPiece : undefined;
+  const wm = spec.wordmark;
+  const touched = (wm.scale ?? 1) !== 1 || !!wm.offsetX || !!wm.offsetY;
+  const wmBase = sized(raw.wordmark, wm.scale ?? 1);
+  // the team name steps out of the logo's way until the customer places it themselves
+  const wmPlaced = touched ? wmBase : clearOfLogo(spec, placement, wmBase, logoPiece, frontNumber);
+  return {
+    wordmark: shift(wmPlaced, wm.offsetX ?? 0, wm.offsetY ?? 0),
+    logo: logoPiece,
+    number: numberPiece,
+    name: shift(sized(raw.name, Lt.nameScale ?? 1, Lt.nameOffsetY ?? 0), Lt.nameOffsetX ?? 0),
+  };
+}
+
+function shift(b: LayoutBox | undefined, dx = 0, dy = 0): LayoutBox | undefined {
+  if (!b || (!dx && !dy)) return b;
+  const half = (b.w ?? b.h) / 2;
+  return { ...b, x: Math.min(Math.max(b.x + dx, Math.min(half, 0.5)), Math.max(1 - half, 0.5)), y: Math.min(Math.max(b.y + dy, b.h / 2), 1 - b.h / 2) };
+}
+
 // Panel content without the outer <svg>, so previews can nest several panels.
 export function renderPanelInner(spec: DesignSpec, placement: Placement, o: RenderOptions): string {
   const { width: W, height: H } = o;
-  const std = STANDARDS[spec.sport];
-  const raw = productByKey(spec.product)?.layout?.[placement] ?? std.layout[placement] ?? {};
   const pb = pieceBox(spec, placement);
-  const Lt = spec.lettering;
-  const isBody = placement === "front" || placement === "back";
   const place = (b?: LayoutBox) => (b ? inPiece(b, pb) : undefined);
-  const logoPiece = spec.logo.url ? logoBox(spec, placement) : undefined;
-  const numberPiece = sized(raw.number, Lt.numberScale ?? 1, isBody ? Lt.numberOffsetY ?? 0 : 0);
-  const frontNumber = placement === "front" && Lt.numberFront ? numberPiece : undefined;
-  const layout = {
-    wordmark: place(clearOfLogo(spec, placement, raw.wordmark, logoPiece, frontNumber)),
-    logo: place(logoPiece),
-    number: place(numberPiece),
-    name: place(sized(raw.name, Lt.nameScale ?? 1, Lt.nameOffsetY ?? 0)),
-  };
+  const lp = panelLayout(spec, placement);
+  const layout = { wordmark: place(lp.wordmark), logo: place(lp.logo), number: place(lp.number), name: place(lp.name) };
   const L = spec.lettering;
   const isSleeve = placement === "sleeve_left" || placement === "sleeve_right";
   const els: string[] = [background(spec, placement, W, H, o.resolveImage, o.idPrefix ?? "")];
@@ -363,6 +356,7 @@ export function renderPanelInner(spec: DesignSpec, placement: Placement, o: Rend
         stroke: spec.colors.outline,
         outline: L.outlineWidth,
         arch: spec.wordmark.style === "arch",
+        diagonal: spec.wordmark.style === "diagonal",
       })
     );
   }
@@ -418,4 +412,79 @@ export function renderPanelSVG(spec: DesignSpec, placement: Placement, o: Render
 
 export function placementsFor(spec: DesignSpec): Placement[] {
   return productByKey(spec.product)?.placements ?? ["front", "back"];
+}
+
+// The back's name-and-number band in print-file pixels (the same for every
+// player, so team jerseys all get the same graphics).
+function backNumberBand(spec: DesignSpec, placement: Placement, H: number) {
+  if (placement !== "back" || (!spec.lettering.numberBack && !spec.lettering.showName)) return undefined;
+  const lp = panelLayout(spec, placement);
+  const pb = pieceBox(spec, placement);
+  const boxes = [spec.lettering.numberBack ? lp.number : undefined, spec.lettering.showName ? lp.name : undefined].filter((b): b is LayoutBox => !!b);
+  if (!boxes.length) return undefined;
+  const y0 = Math.min(...boxes.map((b) => pb.y + (b.y - b.h * 0.75) * pb.h)) * H;
+  const y1 = Math.max(...boxes.map((b) => pb.y + (b.y + b.h * 0.75) * pb.h)) * H;
+  return { y0, y1 };
+}
+
+// ---- selection (builder canvas) ---------------------------------------------
+
+export type Selectable = {
+  id: string; // "logo", "wordmark", "number", "name", "patch:alternate", "patch:captain", "g:<graphic id>"
+  // print-file pixels
+  rect?: { x: number; y: number; w: number; h: number };
+  poly?: { x: number; y: number }[][];
+  guide?: { x: number; y: number }[];
+};
+
+// Everything the customer can click on a panel, top-most first.
+export function selectables(spec: DesignSpec, placement: Placement, player: Player, W: number, H: number): Selectable[] {
+  const pb = pieceBox(spec, placement);
+  const lp = panelLayout(spec, placement);
+  const out: Selectable[] = [];
+  const L = spec.lettering;
+  const isSl = placement === "sleeve_left" || placement === "sleeve_right";
+  const textRect = (b: LayoutBox | undefined, text: string, font: keyof typeof FONTS, pad = 1.15) => {
+    if (!b || !text) return undefined;
+    const box = inPiece(b, pb);
+    const size = fitFontSize(text, font, box, W, H);
+    const w = Math.max(text.length * size * (WIDTH_RATIO[font] ?? 0.6) * pad, size * 0.8);
+    const h = size * CAP_RATIO * 1.5;
+    return { x: box.x * W - w / 2, y: box.y * H - h / 2, w, h };
+  };
+  if (lp.logo && spec.logo.url) {
+    const b = inPiece(lp.logo, pb);
+    const h = b.h * H;
+    const w = b.w ? b.w * W : h;
+    out.push({ id: "logo", rect: { x: b.x * W - w / 2, y: b.y * H - h / 2, w, h } });
+  }
+  if (spec.wordmark.show && spec.wordmark.text) {
+    const r = textRect(lp.wordmark, spec.wordmark.text, spec.wordmark.font, spec.wordmark.style === "arch" ? 1.2 : 1.1);
+    if (r) out.push({ id: "wordmark", rect: spec.wordmark.style === "arch" ? { ...r, y: r.y - r.h * 0.25, h: r.h * 1.4 } : r });
+  }
+  const showNumber = (placement === "front" && L.numberFront) || (placement === "back" && L.numberBack) || (isSl && L.numberSleeves);
+  if (showNumber) {
+    const r = textRect(lp.number, player.number, L.numberFont);
+    if (r) out.push({ id: "number", rect: r });
+  }
+  if (L.showName) {
+    const r = textRect(lp.name, player.name, L.nameFont);
+    if (r) out.push({ id: "name", rect: r });
+  }
+  for (const kind of ["alternate", "captain"] as const) {
+    const on = kind === "alternate" ? !!spec.patches?.alternate?.show && !!spec.patches.alternate.url : (spec.patches?.captain?.letter ?? "none") !== "none";
+    if (!on) continue;
+    for (const b of patchBoxes(spec, kind, placement)) {
+      const box = inPiece(b, pb);
+      const h = box.h * H;
+      const w = box.w ? box.w * W : h;
+      out.push({ id: `patch:${kind}`, rect: { x: box.x * W - w / 2, y: box.y * H - h / 2, w, h } });
+    }
+  }
+  const gs = allGraphics(spec);
+  for (let i = gs.length - 1; i >= 0; i--) {
+    const geo = graphicGeometry(spec, gs[i], placement, W, H, backNumberBand(spec, placement, H));
+    if (geo) out.push({ id: `g:${gs[i].id}`, poly: geo.hit, guide: geo.guide });
+  }
+  return out;
 }

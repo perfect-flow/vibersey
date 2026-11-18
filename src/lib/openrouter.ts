@@ -26,13 +26,21 @@ export async function chatTool<T>(opts: {
   tool: { name: string; description: string; parameters: Record<string, unknown> };
   model?: string;
 }): Promise<T> {
-  const data = await call({
-    model: opts.model ?? env.chatModel(),
-    messages: opts.messages,
-    tools: [{ type: "function", function: opts.tool }],
-    tool_choice: { type: "function", function: { name: opts.tool.name } },
-    temperature: 0.7,
-  });
+  const model = opts.model ?? env.chatModel();
+  const base = { model, messages: opts.messages, tools: [{ type: "function", function: opts.tool }], max_tokens: 16000 };
+  let data;
+  try {
+    data = await call({ ...base, tool_choice: { type: "function", function: { name: opts.tool.name } }, reasoning: { effort: "low" } });
+  } catch (e) {
+    // models that always think can't be forced to a tool; ask nicely instead
+    if (!/tool_choice|thinking|reasoning/i.test(String(e))) throw e;
+    data = await call({
+      ...base,
+      messages: [...opts.messages, { role: "system", content: `Respond only by calling the ${opts.tool.name} tool.` }],
+      tool_choice: "auto",
+      reasoning: { effort: "low" },
+    });
+  }
   const msg = data.choices?.[0]?.message;
   const args = msg?.tool_calls?.[0]?.function?.arguments;
   if (args) return JSON.parse(args) as T;

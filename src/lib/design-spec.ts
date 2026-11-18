@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { GraphicsSchema, isLongSleevePiece, type Graphic } from "./graphics";
 import { SPORTS, STANDARDS, PRODUCTS, LOGO_POSITIONS, PATCH_POSITIONS, defaultProduct, type Sport, type ProductKey } from "./catalog";
 
 // Fonts bundled in /public/fonts. The same files are used for the browser
@@ -104,6 +105,9 @@ export const DesignSpecSchema = z.object({
     artworkPrompt: z.string().nullable().default(null),
     opacity: z.number().min(0).max(1).default(1),
   }),
+  // the jersey's vector parts: panels, stripes, yoke, sash, side panels (graphics.ts)
+  graphics: GraphicsSchema.default([]),
+  // older designs' on/off trim; new designs use graphics (see legacyGraphics)
   trim: z.object({
     yoke: z.boolean().default(false), // contrasting shoulder band
     hemStripes: z.boolean().default(false),
@@ -113,7 +117,7 @@ export const DesignSpecSchema = z.object({
     // always meet at the side seams.
     hemStripesOffsetY: z.number().min(-0.3).max(0.06).default(0),
     sleeveStripesOffsetY: z.number().min(-0.3).max(0.15).default(0),
-  }),
+  }).default({ yoke: false, hemStripes: false, sleeveStripes: false, hemStripesOffsetY: 0, sleeveStripesOffsetY: 0 }),
   logo: z.object({
     url: z.string().url().nullable().default(null),
     source: z.enum(["upload", "ai"]).nullable().default(null),
@@ -129,8 +133,12 @@ export const DesignSpecSchema = z.object({
   wordmark: z.object({
     show: z.boolean().default(true),
     text: z.string().max(30).default(""),
-    style: z.enum(["arch", "straight"]).default("arch"),
+    style: z.enum(["arch", "straight", "diagonal"]).default("arch"),
     font: z.enum(fontKeys).default("graduate"),
+    // customer's size and position adjustments (fractions of the piece)
+    scale: z.number().min(0.4).max(2.5).default(1),
+    offsetX: z.number().min(-0.5).max(0.5).default(0),
+    offsetY: z.number().min(-0.5).max(0.5).default(0),
   }),
   lettering: z.object({
     nameFont: z.enum(fontKeys).default("graduate"),
@@ -145,6 +153,8 @@ export const DesignSpecSchema = z.object({
     numberOffsetY: z.number().min(-0.3).max(0.3).default(0),
     nameScale: z.number().min(0.5).max(1.8).default(1),
     nameOffsetY: z.number().min(-0.3).max(0.3).default(0),
+    numberOffsetX: z.number().min(-0.4).max(0.4).default(0),
+    nameOffsetX: z.number().min(-0.4).max(0.4).default(0),
   }),
   // name/number shown in previews. Orders and team rosters override these.
   sample: z.object({
@@ -172,7 +182,8 @@ export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
       outline: "#E63946",
     },
     pattern: { style: sport === "baseball" ? "pinstripes" : "solid", artworkUrl: null, artworkPrompt: null, opacity: 1 },
-    trim: { yoke: sport === "hockey", hemStripes: sport === "hockey", sleeveStripes: sport === "football" || sport === "hockey" },
+    graphics: defaultGraphics(sport, product ?? defaultProduct(sport).key),
+    trim: { yoke: false, hemStripes: false, sleeveStripes: false },
     logo: { url: null, source: null, prompt: null, position: "auto", scale: 1, offsetX: 0, offsetY: 0 },
     wordmark: {
       // hockey leads with a crest, so its chest name starts empty (and hidden)
@@ -194,6 +205,30 @@ export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
     patches: DEFAULT_PATCHES,
     brand: null,
   });
+}
+
+// The sport's classic starting look, as editable graphics.
+export function defaultGraphics(sport: Sport, product: ProductKey): Graphic[] {
+  const long = isLongSleevePiece(product, "sleeve_left");
+  const hem: Graphic = {
+    id: "hem", kind: "stripes", hidden: false, area: "body", y: 0.8, front: true, back: true,
+    bands: [
+      { color: "secondary", width: 0.04, gap: 0.01 },
+      { color: "accent", width: 0.022, gap: 0.01 },
+      { color: "secondary", width: 0.04, gap: 0 },
+    ],
+  };
+  const sleeves: Graphic = {
+    id: "sleeve", kind: "stripes", hidden: false, area: "sleeves", y: long ? 0.66 : 0.72, front: true, back: true,
+    bands: [
+      { color: "secondary", width: 0.06, gap: 0.02 },
+      { color: "accent", width: 0.035, gap: 0 },
+    ],
+  };
+  if (sport === "hockey")
+    return [{ id: "yoke", kind: "yoke", hidden: false, color: "secondary", depth: 0.14, shape: "straight", trim: [], sleeves: true }, hem, sleeves];
+  if (sport === "football") return [sleeves];
+  return [];
 }
 
 // A brand board seeded from what's on the jersey now.
