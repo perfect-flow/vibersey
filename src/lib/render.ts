@@ -7,8 +7,8 @@
 
 import { STANDARDS, LOGO_SPOTS, DEFAULT_LOGO_POSITION, PATCH_SPOTS, PATCH_SPOT_OVERRIDES, YOKE_PATCH_SPOTS, DEFAULT_PATCH_POSITION, productByKey, type LayoutBox, type Placement, type PatchKind, type PatchPosition } from "./catalog";
 import { FONTS, type DesignSpec, type Player } from "./design-spec";
-import { pieceFor } from "./garments";
-import { allGraphics, graphicGeometry, renderGraphics } from "./graphics";
+import { DPI, SEAM_ALLOWANCE_IN, crossSeams, necklineOf, pieceFor, piecePolys, piecePx, rectClear, type Pt } from "./garments";
+import { allGraphics, graphicGeometry, hasYokePiece, renderGraphics, resolveColor, type ColorRef } from "./graphics";
 
 export type RenderOptions = {
   width: number;
@@ -124,10 +124,21 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
         parts.push(`<rect x="0" y="${(i * 2 + 1) * bh}" width="${W}" height="${bh}" fill="${secondary}" opacity="${p.opacity}"/>`);
       break;
     }
-    case "gradient":
+    case "gradient": {
+      const cols = patternColorRefs(spec).map((c) => resolveColor(spec, c));
+      const stops = cols.map((c, i) => `<stop offset="${(i / Math.max(1, cols.length - 1)).toFixed(3)}" stop-color="${c}"/>`).join("");
+      // the gradient runs down the body piece itself, so every panel blends the same way
+      const [, py, , ph] = pieceFor(spec.product, placement).box;
       parts.push(
-        `<defs><linearGradient id="${idp}g-${placement}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${primary}"/><stop offset="1" stop-color="${secondary}"/></linearGradient></defs><rect width="${W}" height="${H}" fill="url(#${idp}g-${placement})" opacity="${p.opacity}"/>`
+        `<defs><linearGradient id="${idp}g-${placement}" gradientUnits="userSpaceOnUse" x1="0" y1="${(py * H).toFixed(0)}" x2="0" y2="${((py + ph) * H).toFixed(0)}">${stops}</linearGradient></defs><rect width="${W}" height="${H}" fill="url(#${idp}g-${placement})" opacity="${p.opacity}"/>`
       );
+      break;
+    }
+    case "tie_dye":
+      parts.push(tieDye(spec, placement, W, H, idp));
+      break;
+    case "camo":
+      parts.push(camo(spec, placement, W, H));
       break;
     case "artwork": {
       const href = p.artworkUrl ? (resolveImage ? resolveImage(p.artworkUrl) : p.artworkUrl) : undefined;
@@ -138,9 +149,139 @@ function background(spec: DesignSpec, placement: Placement, W: number, H: number
       break;
     }
   }
-  // yoke, panels, stripes, sash, side panels (graphics.ts)
-  parts.push(renderGraphics(spec, placement, W, H, backNumberBand(spec, placement, H)));
+  // yoke, panels, stripes, sash, side panels (graphics.ts), then the collar
+  parts.push(renderGraphics(spec, placement, W, H, backNumberBand(spec, placement, H)), collarEl(spec, placement, W, H));
   return parts.join("");
+}
+
+// The pattern's colors as color refs: the customer's list, or the jersey's
+// own colors when it has none.
+export function patternColorRefs(spec: DesignSpec): ColorRef[] {
+  const own = spec.pattern.colors ?? [];
+  if (own.length >= 2) return own;
+  if (spec.pattern.style === "tie_dye") return ["primary", "secondary", "accent"];
+  if (spec.pattern.style === "camo") return ["primary", "secondary", "accent"];
+  return ["primary", "secondary"];
+}
+
+// A small seeded random generator, so a pattern prints exactly as previewed.
+function rng(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const seedOf = (s: string) => [...s].reduce((h, c) => Math.imul(h ^ c.charCodeAt(0), 16777619), 2166136261);
+
+// Spiral tie-dye: colored arms twisting out from the chest (or the middle of
+// a sleeve), with soft dyed edges and lighter streaks between the colors.
+function tieDye(spec: DesignSpec, placement: Placement, W: number, H: number, idp: string) {
+  const cols = patternColorRefs(spec).map((c) => resolveColor(spec, c));
+  const [bx, by, bw, bh] = pieceFor(spec.product, placement).box;
+  const body = placement === "front" || placement === "back";
+  const cx = (bx + bw * 0.5) * W;
+  const cy = (by + bh * (body ? 0.42 : 0.5)) * H;
+  const R = Math.hypot(W, H);
+  const scale = bw * W; // the swirl scales with the piece, not the print file
+  const arms = cols.length * 2;
+  const twist = (Math.PI * 1.3) / scale; // radians per px outward
+  const flip = placement === "back" || placement === "sleeve_right" ? -1 : 1;
+  const wedge = (a0: number, a1: number) => {
+    const pts: string[] = [];
+    const steps = 90;
+    for (let i = 0; i <= steps; i++) {
+      const r = (i / steps) ** 1.4 * R;
+      const t = a0 + flip * twist * r;
+      pts.push(`${(cx + r * Math.cos(t)).toFixed(0)} ${(cy + r * Math.sin(t)).toFixed(0)}`);
+    }
+    for (let i = steps; i >= 0; i--) {
+      const r = (i / steps) ** 1.4 * R;
+      const t = a1 + flip * twist * r;
+      pts.push(`${(cx + r * Math.cos(t)).toFixed(0)} ${(cy + r * Math.sin(t)).toFixed(0)}`);
+    }
+    return `M${pts.join("L")}Z`;
+  };
+  // arms of slightly uneven width, like hand-folded fabric
+  const rand = rng(seedOf(placement));
+  const widths = Array.from({ length: arms }, () => 0.75 + rand() * 0.5);
+  const total = widths.reduce((a, b) => a + b, 0);
+  const starts: number[] = [];
+  let acc = rand() * Math.PI;
+  for (const w of widths) {
+    starts.push(acc);
+    acc += (w / total) * Math.PI * 2;
+  }
+  const out: string[] = [`<rect width="${W}" height="${H}" fill="${cols[0]}"/>`];
+  for (let k = 0; k < arms; k++) out.push(`<path d="${wedge(starts[k], (starts[(k + 1) % arms] + (k + 1 === arms ? Math.PI * 2 : 0)) + 0.02)}" fill="${cols[k % cols.length]}"/>`);
+  // lighter streaks where the dye didn't soak in
+  for (let k = 0; k < arms; k++) out.push(`<path d="${wedge(starts[k] - 0.03, starts[k] + 0.03)}" fill="#FFFFFF" opacity="0.5"/>`);
+  const blur = (scale / 110).toFixed(0);
+  return `<defs><filter id="${idp}td-${placement}" x="-5%" y="-5%" width="110%" height="110%"><feGaussianBlur stdDeviation="${blur}"/></filter></defs><g filter="url(#${idp}td-${placement})" opacity="${spec.pattern.opacity}">${out.join("")}</g>`;
+}
+
+// Woodland camo: rounded blobs in the pattern colors, layered.
+function camo(spec: DesignSpec, placement: Placement, W: number, H: number) {
+  const cols = patternColorRefs(spec).map((c) => resolveColor(spec, c));
+  const [, , bw] = pieceFor(spec.product, placement).box;
+  const size = bw * W * 0.085; // blob size follows the piece, so every panel matches
+  const rand = rng(seedOf(placement + spec.product));
+  const out: string[] = [`<rect width="${W}" height="${H}" fill="${cols[0]}"/>`];
+  for (let layer = 1; layer < cols.length; layer++) {
+    const n = Math.round(((W * H) / (size * size)) * 0.28);
+    for (let i = 0; i < n; i++) {
+      const x = rand() * W;
+      const y = rand() * H;
+      const r = size * (0.45 + rand() * 0.75);
+      const k = 7;
+      const pts: Pt[] = [];
+      for (let j = 0; j < k; j++) {
+        const t = (j / k) * Math.PI * 2;
+        const rr = r * (0.55 + rand() * 0.6);
+        pts.push({ x: x + rr * Math.cos(t) * 1.35, y: y + rr * Math.sin(t) * 0.8 });
+      }
+      // a smooth closed curve through the midpoints
+      const mid = (a: Pt, b: Pt) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+      let d = "";
+      for (let j = 0; j < k; j++) {
+        const a = pts[j];
+        const b = pts[(j + 1) % k];
+        const m = mid(a, b);
+        d += j === 0 ? `M${mid(pts[k - 1], a).x.toFixed(0)} ${mid(pts[k - 1], a).y.toFixed(0)}` : "";
+        d += `Q${a.x.toFixed(0)} ${a.y.toFixed(0)} ${m.x.toFixed(0)} ${m.y.toFixed(0)}`;
+      }
+      out.push(`<path d="${d}Z" fill="${cols[layer]}"/>`);
+    }
+  }
+  return `<g opacity="${spec.pattern.opacity}">${out.join("")}</g>`;
+}
+
+// The collar: a band of color printed along the neckline. The outer half of
+// the stroke lies outside the piece and is cut away, and the seam allowance
+// folds under, so about half an inch shows. On jerseys with a separate
+// shoulder piece the neck is on that piece.
+export function collarLine(spec: DesignSpec, placement: Placement, W?: number, H?: number): Pt[] | null {
+  const yoked = hasYokePiece(spec.product);
+  if (placement !== "front" && placement !== "back" && placement !== "yoke") return null;
+  const piece = pieceFor(spec.product, placement);
+  const polys = piecePolys(piece, W, H);
+  const b = piecePx(piece, W, H);
+  if (placement === "yoke") return necklineOf(polys, b, 0.8, 0.04);
+  return necklineOf(polys, b, 0.3, yoked ? 0.04 : 0.012);
+}
+export const COLLAR_STROKE = 2 * (SEAM_ALLOWANCE_IN + 0.5) * DPI;
+
+function collarEl(spec: DesignSpec, placement: Placement, W: number, H: number) {
+  const c = spec.collar?.color ?? "accent";
+  if (c === "none") return "";
+  const line = collarLine(spec, placement, W, H);
+  if (!line) return "";
+  const d = `M${line.map((p) => `${p.x.toFixed(0)} ${p.y.toFixed(0)}`).join("L")}`;
+  const sw = COLLAR_STROKE * (W / pieceFor(spec.product, placement).dims.width);
+  return `<path d="${d}" fill="none" stroke="${resolveColor(spec, c)}" stroke-width="${sw.toFixed(1)}" stroke-linejoin="round" stroke-linecap="square"/>`;
 }
 
 // The logo's box on this panel, scaled by the customer's size choice and kept
@@ -157,9 +298,27 @@ function logoBox(spec: DesignSpec, placement: Placement): LayoutBox | undefined 
   // spots above the team name grow downward from their top edge, which sits
   // below this jersey's neckline
   const top = Math.max(base.y - base.h / 2, (pieceFor(spec.product, placement).neck ?? 0) + 0.02);
-  const y = (spot.anchorTop ? top + h / 2 : base.y) + (spec.logo.offsetY ?? 0);
-  const x = base.x + (spec.logo.offsetX ?? 0);
-  return { x: Math.min(Math.max(x, half), 1 - half), y: Math.min(Math.max(y, h / 2), 1 - h / 2), h, w };
+  let y = (spot.anchorTop ? top + h / 2 : base.y) + (spec.logo.offsetY ?? 0);
+  const x = Math.min(Math.max(base.x + (spec.logo.offsetX ?? 0), half), 1 - half);
+  if (!spec.logo.offsetX && !spec.logo.offsetY) y = clearDown(spec, placement, { x, y, h, w });
+  return { x, y: Math.min(Math.max(y, h / 2), 1 - h / 2), h, w };
+}
+
+// A logo in its standard spot steps down a little if it would sit too close to
+// the neckline or a seam on this jersey's cut. Piece fractions.
+function clearDown(spec: DesignSpec, placement: Placement, b: LayoutBox): number {
+  const piece = pieceFor(spec.product, placement);
+  const polys = piecePolys(piece);
+  const [px, py, pw, ph] = piece.box;
+  const { width: W, height: H } = piece.dims;
+  const rect = (y: number) => {
+    const w = (b.w ?? b.h) * pw * W;
+    const h = b.h * ph * H;
+    return { x: (px + b.x * pw) * W - w / 2, y: (py + y * ph) * H - h / 2, w, h };
+  };
+  if (rectClear(polys, rect(b.y))) return b.y;
+  for (let dy = 0.005; dy <= 0.08; dy += 0.005) if (rectClear(polys, rect(b.y + dy))) return b.y + dy;
+  return b.y;
 }
 
 // Where the logo's center sits on a panel without the customer's offset, in
@@ -303,12 +462,34 @@ export function panelLayout(spec: DesignSpec, placement: Placement) {
   const wmBase = sized(raw.wordmark, wm.scale ?? 1);
   // the team name steps out of the logo's way until the customer places it themselves
   const wmPlaced = touched ? wmBase : clearOfLogo(spec, placement, wmBase, logoPiece, frontNumber);
+  // names and numbers never sit on a seam: they step off it to the nearer side
+  const seams = crossSeams(spec.product, placement);
   return {
     wordmark: shift(wmPlaced, wm.offsetX ?? 0, wm.offsetY ?? 0),
     logo: logoPiece,
-    number: numberPiece,
-    name: shift(sized(raw.name, Lt.nameScale ?? 1, Lt.nameOffsetY ?? 0), Lt.nameOffsetX ?? 0),
+    number: offSeams(numberPiece, seams),
+    name: offSeams(shift(sized(raw.name, Lt.nameScale ?? 1, Lt.nameOffsetY ?? 0), Lt.nameOffsetX ?? 0), seams),
   };
+}
+
+// Move a box off any seam band (piece fractions) to whichever side is closer
+// and has room.
+function offSeams(b: LayoutBox | undefined, seams: [number, number][]): LayoutBox | undefined {
+  if (!b) return b;
+  let y = b.y;
+  for (let pass = 0; pass < 2; pass++) {
+    for (const [s0, s1] of seams) {
+      const top = y - b.h / 2;
+      const bottom = y + b.h / 2;
+      if (bottom <= s0 || top >= s1) continue;
+      const up = s0 - b.h / 2;
+      const down = s1 + b.h / 2;
+      const upOk = up - b.h / 2 >= 0.02 && s0 > 0;
+      const downOk = down + b.h / 2 <= 0.98;
+      y = upOk && (!downOk || y - up < down - y) ? up : downOk ? down : y;
+    }
+  }
+  return y === b.y ? b : { ...b, y };
 }
 
 function shift(b: LayoutBox | undefined, dx = 0, dy = 0): LayoutBox | undefined {
@@ -430,7 +611,7 @@ function backNumberBand(spec: DesignSpec, placement: Placement, H: number) {
 // ---- selection (builder canvas) ---------------------------------------------
 
 export type Selectable = {
-  id: string; // "logo", "wordmark", "number", "name", "patch:alternate", "patch:captain", "g:<graphic id>"
+  id: string; // "logo", "wordmark", "number", "name", "patch:alternate", "patch:captain", "collar", "g:<graphic id>"
   // print-file pixels
   rect?: { x: number; y: number; w: number; h: number };
   poly?: { x: number; y: number }[][];
@@ -480,6 +661,21 @@ export function selectables(spec: DesignSpec, placement: Placement, player: Play
       const w = box.w ? box.w * W : h;
       out.push({ id: `patch:${kind}`, rect: { x: box.x * W - w / 2, y: box.y * H - h / 2, w, h } });
     }
+  }
+  // the collar band along the neckline
+  const neck = (spec.collar?.color ?? "accent") !== "none" ? collarLine(spec, placement, W, H) : null;
+  if (neck) {
+    const half = (COLLAR_STROKE / 2) * (W / pieceFor(spec.product, placement).dims.width);
+    const quads: Pt[][] = [];
+    for (let i = 0; i + 1 < neck.length; i++) {
+      const a = neck[i];
+      const b = neck[i + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const nx = (-(b.y - a.y) / len) * half;
+      const ny = ((b.x - a.x) / len) * half;
+      quads.push([{ x: a.x + nx, y: a.y + ny }, { x: b.x + nx, y: b.y + ny }, { x: b.x - nx, y: b.y - ny }, { x: a.x - nx, y: a.y - ny }]);
+    }
+    out.push({ id: "collar", poly: quads });
   }
   const gs = allGraphics(spec);
   for (let i = gs.length - 1; i >= 0; i--) {

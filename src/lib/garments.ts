@@ -117,3 +117,149 @@ const FULL: Omit<Piece, "dims"> = { box: [0, 0, 1, 1], path: "M0 0L1000 0L1000 1
 export function pieceFor(product: string, placement: Placement, fallbackDims = { width: 4500, height: 5400 }): Piece {
   return GARMENTS[product as ProductKey]?.[placement] ?? { ...FULL, dims: fallbackDims };
 }
+
+// ---- outline geometry -------------------------------------------------------
+
+// Every print file is 150 dpi.
+export const DPI = 150;
+// How much fabric at a cut edge disappears into the seam when it's sewn.
+export const SEAM_ALLOWANCE_IN = 0.5;
+
+export type Pt = { x: number; y: number };
+
+// The piece outline in print-file pixels, one polygon per part (a few pieces
+// are cut in two, like the boxy football front with its chest seam).
+export function piecePolys(piece: Piece, W = piece.dims.width, H = piece.dims.height): Pt[][] {
+  const sx = W / 1000;
+  const sy = H / 1000;
+  return piece.path
+    .split("Z")
+    .filter((s) => s.trim())
+    .map((sub) => {
+      const n = sub.match(/-?\d+(\.\d+)?/g)!.map(Number);
+      const pts: Pt[] = [];
+      for (let i = 0; i + 1 < n.length; i += 2) pts.push({ x: n[i] * sx, y: n[i + 1] * sy });
+      return pts;
+    });
+}
+
+export function piecePx(piece: Piece, W = piece.dims.width, H = piece.dims.height) {
+  const [x, y, w, h] = piece.box;
+  return { x: x * W, y: y * H, w: w * W, h: h * H };
+}
+
+// The highest point of the outline at a given x (px), or undefined if the
+// piece doesn't reach that far.
+export function topAt(polys: Pt[][], x: number): number | undefined {
+  let best: number | undefined;
+  for (const pts of polys) {
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const a = pts[j];
+      const b = pts[i];
+      if ((a.x <= x && b.x >= x) || (b.x <= x && a.x >= x)) {
+        const y = a.x === b.x ? Math.min(a.y, b.y) : a.y + ((x - a.x) / (b.x - a.x)) * (b.y - a.y);
+        if (best === undefined || y < best) best = y;
+      }
+    }
+  }
+  return best;
+}
+
+// The neckline as a run of outline points near the top center, if the piece
+// has one. depth: how far down the piece (fraction of the box) to look.
+export function necklineOf(polys: Pt[][], b: ReturnType<typeof piecePx>, depth = 0.3, minDip = 0.04): Pt[] | null {
+  const cx = b.x + b.w / 2;
+  const inNeck = (p: Pt) => Math.abs(p.x - cx) < 0.22 * b.w && p.y < b.y + depth * b.h;
+  for (const pts of polys) {
+    const start = pts.findIndex((p) => !inNeck(p));
+    if (start < 0) continue;
+    const ring = [...pts.slice(start), ...pts.slice(0, start)];
+    const run: Pt[] = [];
+    let best: Pt[] = [];
+    for (const p of ring) {
+      if (inNeck(p)) run.push(p);
+      else {
+        if (run.length > best.length) best = [...run];
+        run.length = 0;
+      }
+    }
+    if (run.length > best.length) best = [...run];
+    // a real neckline dips below the top edge
+    if (best.length >= 3 && Math.max(...best.map((p) => p.y)) - Math.min(...best.map((p) => p.y)) > minDip * b.h) return best;
+  }
+  return null;
+}
+
+const YOKED: Record<string, true> = { "hockey-recycled": true, "football-american": true };
+
+// Seams that run across a body piece, as no-go bands for names and numbers
+// (fractions of the piece box, seam allowance included): the chest seam of a
+// front cut in two parts, and the top edge where a separate shoulder piece is
+// sewn on.
+export function crossSeams(product: string, placement: Placement): [number, number][] {
+  if (placement !== "front" && placement !== "back") return [];
+  const piece = pieceFor(product, placement);
+  const polys = piecePolys(piece);
+  const b = piecePx(piece);
+  // a little more than the seam allowance, so text clears it comfortably
+  const sa = 1.3 * SEAM_ALLOWANCE_IN * DPI;
+  const frac = (y: number) => (y - b.y) / b.h;
+  const out: [number, number][] = [];
+  if (polys.length > 1) {
+    // parts stacked top to bottom: the seam runs between them
+    const parts = polys
+      .map((pts) => ({ top: Math.min(...pts.map((p) => p.y)), bottom: Math.max(...pts.map((p) => p.y)) }))
+      .sort((a, c) => a.top - c.top);
+    for (let i = 0; i + 1 < parts.length; i++) out.push([frac(parts[i].bottom - sa), frac(parts[i + 1].top + sa)]);
+  }
+  if (product in YOKED) {
+    let top = b.y;
+    for (let i = 0; i <= 10; i++) top = Math.max(top, topAt(polys, b.x + b.w * (0.15 + 0.07 * i)) ?? top);
+    out.push([-1, frac(top + sa)]);
+  }
+  return out;
+}
+
+function insidePoly(p: Pt, poly: Pt[]) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+export function distToEdges(p: Pt, poly: Pt[]) {
+  let best = Infinity;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[j];
+    const b = poly[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+    best = Math.min(best, Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)));
+  }
+  return best;
+}
+
+// Points around a rectangle's outline (px).
+export function rectSamples(r: { x: number; y: number; w: number; h: number }, n = 6): Pt[] {
+  const pts: Pt[] = [];
+  for (let i = 0; i <= n; i++) {
+    const u = i / n;
+    pts.push({ x: r.x + u * r.w, y: r.y }, { x: r.x + u * r.w, y: r.y + r.h }, { x: r.x, y: r.y + u * r.h }, { x: r.x + r.w, y: r.y + u * r.h });
+  }
+  return pts;
+}
+
+// Which part of the piece a point is on (-1: cut away).
+export const partAt = (polys: Pt[][], p: Pt) => polys.findIndex((poly) => insidePoly(p, poly));
+
+// Is a rectangle (px) on one part of the piece, at least `margin` px from
+// every cut edge and seam?
+export function rectClear(polys: Pt[][], r: { x: number; y: number; w: number; h: number }, margin = SEAM_ALLOWANCE_IN * DPI) {
+  const pts = rectSamples(r);
+  const k = partAt(polys, pts[0]);
+  return k >= 0 && pts.every((p) => partAt(polys, p) === k && distToEdges(p, polys[k]) >= margin);
+}

@@ -15,7 +15,7 @@
 import { z } from "zod";
 import type { Placement } from "./catalog";
 import type { DesignSpec } from "./design-spec";
-import { pieceFor } from "./garments";
+import { DPI, SEAM_ALLOWANCE_IN, pieceFor, piecePolys, topAt } from "./garments";
 
 // A color is one of the design's five color roles (so team kits and brand
 // changes recolor it) or a hex value.
@@ -101,7 +101,8 @@ export const SashSchema = z.object({
   width: z.number().min(0.02).max(0.4).default(0.12),
   color: ColorRef,
   trim: TrimSchema,
-  back: z.boolean().default(false),
+  // wraps around the back too (mirrored), so it meets at the side seams
+  back: z.boolean().default(true),
 });
 
 export const SidePanelsSchema = z.object({
@@ -126,7 +127,7 @@ export const GraphicsSchema = z.array(GraphicSchema).max(14);
 export const GRAPHIC_LABELS: Record<GraphicKind, string> = {
   panel: "Panel",
   stripes: "Stripes",
-  yoke: "Yoke",
+  yoke: "Shoulders",
   sash: "Sash",
   side_panels: "Side panels",
 };
@@ -293,10 +294,12 @@ export function edgePoints(g: z.infer<typeof PanelSchema>, straightAt?: number):
   }
 }
 
-// The height of a panel's edge at the side seams (used for a straight back).
-function sideHeight(g: z.infer<typeof PanelSchema>) {
+// A panel's "straight" back: a straight line between the heights where the
+// front edge meets the two side seams, so the two pieces line up when sewn
+// (flat for symmetric cuts, tilted for a diagonal).
+function straightBack(g: z.infer<typeof PanelSchema>): [number, number][] {
   const pts = edgePoints(g);
-  return (pts[0][1] + pts[pts.length - 1][1]) / 2;
+  return [[0, pts[0][1]], [1, pts[pts.length - 1][1]]];
 }
 
 // Offset a left-to-right polyline by d px; positive d moves it up.
@@ -367,18 +370,20 @@ export function graphicGeometry(spec: DesignSpec, g: Graphic, placement: Placeme
     case "panel": {
       let line: [number, number][] | null = null;
       if (placement === "front" && g.front) line = edgePoints(g);
-      else if (placement === "back" && g.back !== "none") line = g.back === "same" ? edgePoints(g) : edgePoints(g, sideHeight(g));
+      else if (placement === "back" && g.back !== "none") line = g.back === "same" ? edgePoints(g) : straightBack(g);
       else if (sleeve && g.sleeves) line = [[0, g.sleeveY], [1, g.sleeveY]];
       if (!line) return null;
       let px = line.map(([u, v]) => toPx(f, u, v)).sort((a, b) => a.x - b.x);
       if (placement === "back" && g.back === "straight" && avoid && g.side === "below") {
         // a straight back split that would cut through the number steps down
         // below it, still meeting the front at the side seams
-        const yAt = px[0].y;
         const margin = 0.03 * f.unit;
-        if (yAt > avoid.y0 - margin && yAt < avoid.y1 + margin) {
-          const low = avoid.y1 + margin;
-          px = [px[0], { x: f.x0 + 0.17 * f.w, y: low }, { x: f.x0 + 0.83 * f.w, y: low }, px[px.length - 1]];
+        const crosses = (y: number) => y > avoid.y0 - margin && y < avoid.y1 + margin;
+        const a = px[0];
+        const b = px[px.length - 1];
+        if (crosses(a.y) || crosses(b.y) || (a.y < avoid.y0 - margin) !== (b.y < avoid.y0 - margin)) {
+          const low = Math.max(avoid.y1 + margin, a.y, b.y);
+          px = [a, { x: f.x0 + 0.17 * f.w, y: low }, { x: f.x0 + 0.83 * f.w, y: low }, b];
         }
       }
       const up = g.side === "below" ? 1 : -1;
@@ -426,18 +431,46 @@ export function graphicGeometry(spec: DesignSpec, g: Graphic, placement: Placeme
       }
       if (!body) return null;
       if (yokePiece) {
-        // piping along the seam under the separate shoulder piece
+        // piping along the seam under the separate shoulder piece. It follows
+        // the body piece's real top edge and starts below the seam allowance,
+        // so the part that disappears into the seam is extra, not the trim.
         if (!g.trim.length) return null;
-        const pb = pieceFor(spec.product, placement).box;
+        const piece = pieceFor(spec.product, placement);
+        const polys = piecePolys(piece, W, H);
+        const pb = piece.box;
         const top = pb[1] * H;
-        const layers: Layer[] = [];
-        let acc = g.trim.reduce((s, t) => s + t.width, 0);
-        for (let i = g.trim.length - 1; i >= 0; i--) {
-          layers.push({ d: `M-20 ${(top - 0.02 * f.unit).toFixed(1)}H${W + 20}V${(top + acc * f.unit).toFixed(1)}H-20Z`, fill: col(g.trim[i].color) });
-          acc -= g.trim[i].width;
-        }
+        const sa = SEAM_ALLOWANCE_IN * DPI * (W / piece.dims.width);
         const tw = g.trim.reduce((s, t) => s + t.width, 0) * f.unit;
-        return { layers, hit: [[{ x: f.x0, y: top }, { x: f.x0 + f.w, y: top }, { x: f.x0 + f.w, y: top + tw }, { x: f.x0, y: top + tw }]] };
+        // sample the top edge; only the stretch that meets the shoulder piece
+        // (the armholes curve away below it)
+        const n = 48;
+        const runs: Pt[][] = [];
+        let run: Pt[] = [];
+        for (let i = 0; i <= n; i++) {
+          const x = pb[0] * W + (i / n) * pb[2] * W;
+          const y = topAt(polys, x);
+          if (y !== undefined && y < top + 0.06 * f.unit) run.push({ x, y });
+          else if (run.length) {
+            runs.push(run);
+            run = [];
+          }
+        }
+        if (run.length) runs.push(run);
+        const band = (line: Pt[], d0: number, d1: number) =>
+          polyD([...line.map((p) => ({ x: p.x, y: p.y + d0 })), ...[...line].reverse().map((p) => ({ x: p.x, y: p.y + d1 }))]);
+        const layers: Layer[] = [];
+        const hit: Pt[][] = [];
+        for (const r0 of runs.filter((r) => r.length > 1)) {
+          // reach a little past the ends so the band meets the armhole seams
+          const r = [{ x: r0[0].x - 0.02 * f.w, y: r0[0].y }, ...r0, { x: r0[r0.length - 1].x + 0.02 * f.w, y: r0[r0.length - 1].y }];
+          let acc = tw;
+          for (let i = g.trim.length - 1; i >= 0; i--) {
+            layers.push({ d: band(r, -0.02 * f.unit, sa + acc), fill: col(g.trim[i].color) });
+            acc -= g.trim[i].width * f.unit;
+          }
+          hit.push([...r.map((p) => ({ x: p.x, y: p.y + sa })), ...[...r].reverse().map((p) => ({ x: p.x, y: p.y + sa + tw }))]);
+        }
+        return layers.length ? { layers, hit } : null;
       }
       // front and back meet at the shoulder seam, so a yoke is measured from
       // each panel's own top edge

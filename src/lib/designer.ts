@@ -59,7 +59,8 @@ How designs work:
 - Colors are 6-digit hex. Make sure name/number "text" and "outline" colors contrast strongly with "primary" and with any graphic behind the numbers.
 - Fonts are limited to these keys: ${fontList}. Names and numbers use lettering.nameFont / lettering.numberFont. Pick fonts that suit the sport (block/varsity for numbers; script only for baseball wordmarks).
 - Player names and numbers are drawn by code, never by the image model. Never put words, letters or numbers into artwork or logo prompts.
-- Build every jersey body with spec.graphics. pattern.style "artwork" (an AI-painted texture, set with artwork_prompt) is ONLY for when the customer explicitly asks for a photographic texture such as camo, flames, marble, smoke or paint splatter; it can't be selected or edited like the vector parts, so never use it for stripes, panels, chevrons, geometric shapes or to recreate an inspiration image. Leave artwork_prompt null otherwise, and set pattern.style back to "solid" when replacing old artwork with graphics.
+- Build every jersey body with spec.graphics on top of pattern.style. All-over patterns print over the whole jersey (body, sleeves, shoulders) and graphics such as stripes and panels are drawn on top of them: for tie-dye use pattern.style "tie_dye" and for camouflage "camo", with pattern.colors (2-5 colors, e.g. ["primary","secondary","accent","#2EC4F1"]); "gradient" fades through pattern.colors from the top to the hem. Keep panels off an all-over pattern unless asked (a solid panel covers it); stripes and trim on top look great. pattern.style "artwork" (an AI-painted texture, set with artwork_prompt) is ONLY for when the customer explicitly asks for a photographic texture that the vector patterns can't do, such as flames, marble, smoke, galaxy or paint splatter; it can't be selected or edited like the vector parts, so never use it for stripes, panels, chevrons, geometric shapes, tie-dye, camo or to recreate an inspiration image. Leave artwork_prompt null otherwise, and set pattern.style back to "solid" when replacing old artwork with graphics.
+- collar.color is the band printed around the neckline: a color role, a hex, or "none" (body color up to the neck). Usually the trim color ("accent") or the shoulder/second color.
 - Logo size and placement: logo.position is one of auto (the sport's usual spot, currently ${DEFAULT_LOGO_POSITION[spec.sport].replace("_", " ")}), above_name (centered above the chest team name), center_chest (big crest in the middle of the chest), left_chest, right_chest, sleeves, upper_back. logo.scale multiplies the size (0.5 to 3, 1 = standard). When asked to make the logo bigger, raise logo.scale by about 0.5 each time; for a really big logo use center_chest, and turn off wordmark.show and lettering.numberFront if they would overlap it. logo.offsetX / logo.offsetY nudge it (-0.5 to 0.5 of the panel; negative = left / higher; about 0.04 per "a bit"); reset both to 0 when the position changes. wordmark.scale (0.4-2.5), wordmark.offsetX / offsetY move and resize the chest team name the same way. lettering.numberScale (0.5 to 1.6) and lettering.nameScale (0.5 to 1.8) resize the player number and name; lettering.numberOffsetY / nameOffsetY (-0.3 to 0.3, negative = higher) and numberOffsetX / nameOffsetX move them. The customer can also select any part on the jersey and drag or resize it themselves.
 - Patches (jersey etiquette): ${PATCH_GUIDANCE[spec.sport]} patches.alternate shows the brand's alternate logo as a patch (show true/false; position: ${PATCH_POSITIONS.join(", ")}; "auto" = ${DEFAULT_PATCH_POSITION[spec.sport].alternate.replace("_", " ")} for this sport; scale 0.5 to 2). patches.captain.letter is "none", "C" (captain) or "A" (alternate captain); its position "auto" = ${DEFAULT_PATCH_POSITION[spec.sport].captain.replace("_", " ")}; style "letter" (outlined letter) or "patch" (letter on a square patch). Never put a logo on the shoulders by moving the main logo; shoulder badges are the alternate logo. When they want shoulder patches or an alternate logo and none exists (alternateLogo "none"), set alt_logo_prompt to a short description of a simpler secondary mark derived from the main logo (e.g. "the horse head alone inside a circle") and set patches.alternate.show true. The customer can also open "Logos & patches" to upload or generate logos themselves.
 - Only set logo_prompt when the customer asks you to create a logo for them, or to change the AI logo they already have. Then describe a flat, bold, vector-style sports emblem with NO text, centered on a plain pure white background. Leave it null otherwise.
@@ -160,6 +161,17 @@ function tidy(s: Record<string, any>) {
   }
   if (s.logo && typeof s.logo.scale === "number") s.logo.scale = Math.min(3, Math.max(0.5, s.logo.scale));
   if (s.pattern && typeof s.pattern.opacity === "number") s.pattern.opacity = Math.min(1, Math.max(0, s.pattern.opacity));
+  const ref = (c: unknown) => {
+    const v = String(c ?? "").trim();
+    if (/^(primary|secondary|accent|text|outline)$/.test(v)) return v;
+    const m = v.match(/^#?([0-9a-fA-F]{6})$/);
+    return m ? `#${m[1].toUpperCase()}` : null;
+  };
+  if (s.pattern) {
+    if (s.pattern.style === "tie-dye" || s.pattern.style === "tiedye") s.pattern.style = "tie_dye";
+    if (Array.isArray(s.pattern.colors)) s.pattern.colors = s.pattern.colors.map(ref).filter(Boolean).slice(0, 5);
+  }
+  if (s.collar && typeof s.collar === "object") s.collar.color = s.collar.color === "none" ? "none" : ref(s.collar.color) ?? "accent";
   if (s.lettering && typeof s.lettering.outlineWidth === "number") s.lettering.outlineWidth = Math.min(0.2, Math.max(0, s.lettering.outlineWidth));
   const clamp = (o: Record<string, unknown> | undefined, k: string, lo: number, hi: number) => {
     if (o && typeof o[k] === "number") o[k] = Math.min(hi, Math.max(lo, o[k] as number));
@@ -294,6 +306,8 @@ export function keepOnBrand(current: DesignSpec, next: DesignSpec, brandPatch: u
     for (const k of ["trim", "bands"]) if (Array.isArray(x[k])) x[k] = x[k].map((t: { color: string }) => ({ ...t, color: snap(t.color) }));
     return x as Graphic;
   });
+  if (out.pattern.colors?.length && JSON.stringify(out.pattern.colors) !== JSON.stringify(current.pattern.colors ?? [])) out.pattern = { ...out.pattern, colors: out.pattern.colors.map(snap) };
+  if (out.collar && out.collar.color !== "none" && out.collar.color !== current.collar?.color) out.collar = { color: snap(out.collar.color) };
   out.wordmark = { ...out.wordmark, font: brand.fonts.wordmark };
   out.lettering = { ...out.lettering, numberFont: brand.fonts.number, nameFont: brand.fonts.name };
   const main = brand.logos.main;
@@ -484,9 +498,15 @@ export async function runDesignTurn(input: {
 
   // Painted artwork is only for textures the customer asked for by name. It's
   // never used to copy an inspiration image: that is rebuilt with graphics.
-  const TEXTURE_WORDS = /\b(camo|camouflage|flames?|fire|marble|smoke|splatter|paint|brush|grunge|texture|galaxy|clouds?|water|tie.?dye|halftone|distressed)\b/i;
+  const TEXTURE_WORDS = /\b(camo|camouflage|flames?|fire|marble|smoke|splatter|paint|brush|grunge|texture|galaxy|clouds?|water|t[iy]e[\s-]?d[iy]e[sd]?|halftone|distressed|acid|psychedelic|lava|lightning|storm|ice|crystal|space|nebula)\b/i;
   if (args.artwork_prompt && !TEXTURE_WORDS.test(input.message)) args.artwork_prompt = null;
-  if (!args.artwork_prompt && next.pattern.style === "artwork" && input.spec.pattern.style !== "artwork") next.pattern = { ...next.pattern, style: "solid" };
+  // tie-dye and camo are vector patterns now: sharp, editable, and printed all over
+  const vectorPattern = /\bt[iy]e[\s-]?d[iy]e/i.test(input.message) ? "tie_dye" : /\bcamo(uflage)?\b/i.test(input.message) ? "camo" : null;
+  if (vectorPattern && (next.pattern.style === "artwork" || args.artwork_prompt) && !/\b(photo|realistic|painted|ai texture)\b/i.test(input.message)) {
+    args.artwork_prompt = null;
+    next.pattern = { ...next.pattern, style: vectorPattern };
+  }
+  if (!args.artwork_prompt && next.pattern.style === "artwork" && !next.pattern.artworkUrl) next.pattern = { ...next.pattern, style: "solid" };
   if (args.artwork_prompt) {
     const prompt = `${args.artwork_prompt}\n\nFull-bleed seamless textile print for a sublimated ${next.sport} jersey panel, portrait orientation. Color palette: ${palette}. Absolutely no text, letters, numbers, logos, people, mannequins or garment outlines. Flat artwork only, edge to edge.`;
     jobs.push(

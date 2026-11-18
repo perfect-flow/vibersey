@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { LOGO_POSITIONS, PATCH_POSITIONS, PATCH_POSITION_LABELS, type LogoPosition, type PatchPosition } from "@/lib/catalog";
-import { FONTS, brandPalette, type DesignSpec, type FontKey } from "@/lib/design-spec";
+import { FONTS, MULTI_COLOR_PATTERNS, PATTERN_LABELS, PATTERN_STYLES, brandPalette, type DesignSpec, type FontKey, type PatternStyle } from "@/lib/design-spec";
+import { patternColorRefs } from "@/lib/render";
 import {
   GRAPHIC_LABELS,
   PANEL_EDGES,
   allGraphics,
+  hasYokePiece,
   materialize,
   newGraphicId,
   resolveColor,
@@ -124,6 +126,27 @@ function TrimEditor({ spec, trim, onChange }: { spec: DesignSpec; trim: Trim; on
   );
 }
 
+// The collar's color, or none (the body color runs up to the neck).
+function CollarPick({ spec, patch }: { spec: DesignSpec; patch: Patch }) {
+  const c = spec.collar?.color ?? "accent";
+  return (
+    <span className="flex items-center gap-1">
+      {c !== "none" ? (
+        <>
+          <Swatches spec={spec} label="Collar" value={c} onChange={(v) => patch((s) => ({ ...s, collar: { color: v } }))} />
+          <button type="button" className="text-xs text-muted" aria-label="No collar color" onClick={() => patch((s) => ({ ...s, collar: { color: "none" } }))}>
+            ×
+          </button>
+        </>
+      ) : (
+        <button type="button" className="rounded-full border border-dashed border-line px-2 text-xs text-muted" onClick={() => patch((s) => ({ ...s, collar: { color: "accent" } }))}>
+          + collar color
+        </button>
+      )}
+    </span>
+  );
+}
+
 // Small contextual options for whatever is selected on the canvas.
 export function ElementToolbar({
   spec,
@@ -150,24 +173,51 @@ export function ElementToolbar({
 
   if (selected === "body") {
     title = "Jersey body";
+    const style = spec.pattern.style;
+    const multi = MULTI_COLOR_PATTERNS.includes(style);
+    const cols = patternColorRefs(spec);
+    const setCols = (c: ColorRef[]) => patch((s) => ({ ...s, pattern: { ...s.pattern, colors: c } }));
     controls = (
       <>
-        <Swatches spec={spec} label="Body" value="primary" onChange={(c) => patch((s) => ({ ...s, colors: { ...s.colors, primary: resolveColor(s, c) } }))} />
+        {!multi && <Swatches spec={spec} label="Body" value="primary" onChange={(c) => patch((s) => ({ ...s, colors: { ...s.colors, primary: resolveColor(s, c) } }))} />}
         <select
           className="input w-auto py-1 text-sm"
-          value={spec.pattern.style}
-          aria-label="Base pattern"
-          onChange={(e) => patch((s) => ({ ...s, pattern: { ...s.pattern, style: e.target.value as DesignSpec["pattern"]["style"] } }))}
+          value={style}
+          aria-label="All-over pattern"
+          onChange={(e) => patch((s) => ({ ...s, pattern: { ...s.pattern, style: e.target.value as PatternStyle } }))}
         >
-          {(["solid", "pinstripes", "stripes", "hoops", "gradient"] as const).map((p) => (
+          {PATTERN_STYLES.filter((p) => p !== "artwork" || spec.pattern.artworkUrl).map((p) => (
             <option key={p} value={p}>
-              {p[0].toUpperCase() + p.slice(1)}
+              {PATTERN_LABELS[p]}
             </option>
           ))}
-          {spec.pattern.artworkUrl && <option value="artwork">AI texture</option>}
         </select>
+        {multi && (
+          <span className="flex items-center gap-1">
+            <span className="text-xs text-muted">{style === "gradient" ? "Top to bottom" : "Colors"}</span>
+            {cols.map((c, i) => (
+              <span key={i} className="flex items-center">
+                <Swatches spec={spec} value={c} onChange={(v) => setCols(cols.map((x, j) => (j === i ? v : x)))} />
+                {cols.length > 2 && (
+                  <button type="button" className="ml-0.5 text-xs text-muted" aria-label="Remove color" onClick={() => setCols(cols.filter((_, j) => j !== i))}>
+                    ×
+                  </button>
+                )}
+              </span>
+            ))}
+            {cols.length < 5 && (
+              <button type="button" className="rounded-full border border-dashed border-line px-2 text-xs text-muted" onClick={() => setCols([...cols, cols.includes("accent") ? "text" : "accent"])}>
+                + color
+              </button>
+            )}
+          </span>
+        )}
+        <CollarPick spec={spec} patch={patch} />
       </>
     );
+  } else if (selected === "collar") {
+    title = "Collar";
+    controls = <CollarPick spec={spec} patch={patch} />;
   } else if (selected === "wordmark") {
     title = "Team name";
     const w = spec.wordmark;
@@ -364,11 +414,14 @@ export function ElementToolbar({
       controls = (
         <>
           <Swatches spec={spec} label="Color" value={g.color} onChange={(c) => set((x) => ({ ...x, color: c }) as Graphic)} />
-          <select className="input w-auto py-1 text-sm" value={g.shape} aria-label="Yoke shape" onChange={(e) => set((x) => ({ ...x, shape: e.target.value as typeof g.shape }) as Graphic)}>
-            <option value="straight">Straight</option>
-            <option value="curved">Curved</option>
-            <option value="pointed">Pointed</option>
-          </select>
+          {/* jerseys with a separate shoulder piece color the whole piece, so the edge shape only applies to the others */}
+          {!hasYokePiece(spec.product) && (
+            <select className="input w-auto py-1 text-sm" value={g.shape} aria-label="Bottom edge" onChange={(e) => set((x) => ({ ...x, shape: e.target.value as typeof g.shape }) as Graphic)}>
+              <option value="straight">Straight edge</option>
+              <option value="curved">Curved edge</option>
+              <option value="pointed">Pointed edge</option>
+            </select>
+          )}
           <TrimEditor spec={spec} trim={g.trim} onChange={(trim) => set((x) => ({ ...x, trim }) as Graphic)} />
           {common}
         </>
@@ -421,8 +474,8 @@ export function AddMenu({ spec, patch, onSelect, onOpenLogos }: { spec: DesignSp
     ["Chevron split", () => addGraphic((id) => ({ id, kind: "panel", hidden: false, edge: "chevron", side: "below", y: 0.45, depth: -0.14, points: [], color: "secondary", trim: [{ color: "text", width: 0.014 }, { color: "accent", width: 0.014 }], front: true, back: "straight", sleeves: true, sleeveY: 0.62 }))],
     ["Star cut", () => addGraphic((id) => ({ id, kind: "panel", hidden: false, edge: "star_point", side: "below", y: 0.5, depth: 0.24, points: [], color: "secondary", trim: [{ color: "accent", width: 0.022 }, { color: "text", width: 0.012 }], front: true, back: "straight", sleeves: true, sleeveY: 0.6 }))],
     ["Diagonal split", () => addGraphic((id) => ({ id, kind: "panel", hidden: false, edge: "diagonal", side: "below", y: 0.55, depth: 0.3, points: [], color: "secondary", trim: [{ color: "accent", width: 0.016 }], front: true, back: "same", sleeves: false, sleeveY: 0.62 }))],
-    ["Yoke", () => addGraphic((id) => ({ id, kind: "yoke", hidden: false, color: "secondary", depth: 0.16, shape: "straight", trim: [{ color: "accent", width: 0.012 }], sleeves: true }))],
-    ["Sash", () => addGraphic((id) => ({ id, kind: "sash", hidden: false, from: 0.12, to: 0.82, width: 0.14, color: "secondary", trim: [{ color: "accent", width: 0.012 }], back: false }))],
+    ["Shoulders", () => addGraphic((id) => ({ id, kind: "yoke", hidden: false, color: "secondary", depth: 0.16, shape: "straight", trim: [{ color: "accent", width: 0.012 }], sleeves: true }))],
+    ["Sash", () => addGraphic((id) => ({ id, kind: "sash", hidden: false, from: 0.12, to: 0.82, width: 0.14, color: "secondary", trim: [{ color: "accent", width: 0.012 }], back: true }))],
     ["Side panels", () => addGraphic((id) => ({ id, kind: "side_panels", hidden: false, width: 0.12, top: 0.18, taper: 0.3, color: "secondary", trim: [{ color: "accent", width: 0.012 }], back: true }))],
     ["Captain C", () => { patch((s) => ({ ...s, patches: { ...s.patches, captain: { ...s.patches.captain, letter: "C" } } })); onSelect("patch:captain"); setOpen(false); }],
   ];
