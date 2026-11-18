@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SPORTS, STANDARDS, PRODUCTS, LOGO_POSITIONS, defaultProduct, type Sport, type ProductKey } from "./catalog";
+import { SPORTS, STANDARDS, PRODUCTS, LOGO_POSITIONS, PATCH_POSITIONS, defaultProduct, type Sport, type ProductKey } from "./catalog";
 
 // Fonts bundled in /public/fonts. The same files are used for the browser
 // preview and for the server-side print-file render, so what the customer sees
@@ -29,18 +29,74 @@ const fontKeys = Object.keys(FONTS) as [FontKey, ...FontKey[]];
 
 const hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
+const ColorsSchema = z.object({
+  primary: hex, // body
+  secondary: hex, // yoke / panels / stripes
+  accent: hex, // trim
+  text: hex, // name and number fill
+  outline: hex, // name and number outline
+});
+
+// A logo image the customer uploaded or the AI drew (transparent PNG).
+export const LogoAssetSchema = z.object({
+  url: z.string().url(),
+  source: z.enum(["upload", "ai"]),
+  prompt: z.string().nullable().default(null),
+});
+export type LogoAsset = z.infer<typeof LogoAssetSchema>;
+
+// The team's brand board: the colors, fonts and logos every edit must keep.
+// It travels with the design (spec.brand) and can be saved to the customer's
+// library (table brand_boards) to start other jerseys from.
+export const BrandSchema = z.object({
+  name: z.string().max(40).default(""),
+  colors: ColorsSchema,
+  // more brand colors the jersey may use (e.g. a third team color)
+  extras: z.array(hex).max(4).default([]),
+  fonts: z.object({
+    wordmark: z.enum(fontKeys).default("graduate"),
+    number: z.enum(fontKeys).default("graduate"),
+    name: z.enum(fontKeys).default("graduate"),
+  }).default({ wordmark: "graduate", number: "graduate", name: "graduate" }),
+  // a short style direction, e.g. "minimal, aggressive, 90s throwback"
+  style: z.string().max(300).default(""),
+  logos: z.object({
+    main: LogoAssetSchema.nullable().default(null),
+    alternate: LogoAssetSchema.nullable().default(null), // shoulder badge / secondary mark
+  }).default({ main: null, alternate: null }),
+  // id in the brand library once saved
+  savedId: z.string().uuid().nullable().default(null),
+});
+export type Brand = z.infer<typeof BrandSchema>;
+
+const PatchesSchema = z.object({
+  // the brand's alternate logo as a patch (hockey shoulders, baseball sleeve...)
+  alternate: z.object({
+    show: z.boolean().default(false),
+    url: z.string().url().nullable().default(null),
+    position: z.enum(PATCH_POSITIONS).default("auto"),
+    scale: z.number().min(0.5).max(2).default(1),
+  }).default({ show: false, url: null, position: "auto", scale: 1 }),
+  // captain / alternate captain letter
+  captain: z.object({
+    letter: z.enum(["none", "C", "A"]).default("none"),
+    position: z.enum(PATCH_POSITIONS).default("auto"),
+    style: z.enum(["letter", "patch"]).default("letter"),
+    scale: z.number().min(0.5).max(2).default(1),
+  }).default({ letter: "none", position: "auto", style: "letter", scale: 1 }),
+});
+export type Patches = z.infer<typeof PatchesSchema>;
+export const DEFAULT_PATCHES: Patches = {
+  alternate: { show: false, url: null, position: "auto", scale: 1 },
+  captain: { letter: "none", position: "auto", style: "letter", scale: 1 },
+};
+
 export const DesignSpecSchema = z.object({
   sport: z.enum(SPORTS),
   // which Printful jersey (see PRODUCTS in catalog.ts)
   product: z.enum(PRODUCTS.map((p) => p.key) as [ProductKey, ...ProductKey[]]),
   teamName: z.string().max(40).default(""),
-  colors: z.object({
-    primary: hex, // body
-    secondary: hex, // yoke / panels / stripes
-    accent: hex, // trim
-    text: hex, // name and number fill
-    outline: hex, // name and number outline
-  }),
+  colors: ColorsSchema,
   pattern: z.object({
     style: z.enum(["solid", "stripes", "pinstripes", "hoops", "gradient", "artwork"]),
     // AI-generated, text-free background art (style === "artwork")
@@ -95,6 +151,8 @@ export const DesignSpecSchema = z.object({
     name: z.string().max(16).default("PLAYER"),
     number: z.string().max(3).default("00"),
   }),
+  patches: PatchesSchema.default(DEFAULT_PATCHES),
+  brand: BrandSchema.nullable().default(null),
 });
 export type DesignSpec = z.infer<typeof DesignSpecSchema>;
 
@@ -132,7 +190,64 @@ export function defaultSpec(sport: Sport, product?: ProductKey): DesignSpec {
       outlineWidth: 0.06,
     },
     sample: { name: "PLAYER", number: "23" },
+    patches: DEFAULT_PATCHES,
+    brand: null,
   });
+}
+
+// A brand board seeded from what's on the jersey now.
+export function brandFromSpec(spec: DesignSpec): Brand {
+  return BrandSchema.parse({
+    name: spec.teamName || spec.wordmark.text || "",
+    colors: spec.colors,
+    extras: [],
+    fonts: { wordmark: spec.wordmark.font, number: spec.lettering.numberFont, name: spec.lettering.nameFont },
+    style: "",
+    logos: {
+      main: spec.logo.url && spec.logo.source ? { url: spec.logo.url, source: spec.logo.source, prompt: spec.logo.prompt } : null,
+      alternate: spec.patches?.alternate?.url ? { url: spec.patches.alternate.url, source: "upload", prompt: null } : null,
+    },
+    savedId: null,
+  });
+}
+
+// Put a brand board on a jersey: its colors, fonts and logos, keeping the
+// jersey's own layout. Used when picking a saved brand and by "Apply brand".
+export function applyBrand(spec: DesignSpec, brand: Brand): DesignSpec {
+  const main = brand.logos.main;
+  const alt = brand.logos.alternate;
+  const patches = spec.patches ?? DEFAULT_PATCHES;
+  return {
+    ...spec,
+    brand,
+    teamName: brand.name || spec.teamName,
+    wordmark: { ...spec.wordmark, font: brand.fonts.wordmark, text: brand.name ? brand.name.toUpperCase().slice(0, 30) : spec.wordmark.text },
+    colors: { ...brand.colors },
+    lettering: { ...spec.lettering, numberFont: brand.fonts.number, nameFont: brand.fonts.name },
+    logo: main ? { ...spec.logo, url: main.url, source: main.source, prompt: main.prompt } : spec.logo,
+    patches: { ...patches, alternate: { ...patches.alternate, url: alt?.url ?? null, show: alt ? patches.alternate.show || !patches.alternate.url : false } },
+  };
+}
+
+// Every color the brand allows on the jersey: its five roles, extras, and
+// plain white and black, which go with any palette.
+export function brandPalette(brand: Brand): string[] {
+  const all = [...Object.values(brand.colors), ...brand.extras, "#FFFFFF", "#000000"].map((c) => c.toUpperCase());
+  return [...new Set(all)];
+}
+
+// The closest brand color to a color (simple RGB distance).
+export function nearestBrandColor(color: string, palette: string[]): string {
+  const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [r, g, b] = rgb(color);
+  let best = palette[0];
+  let bestD = Infinity;
+  for (const p of palette) {
+    const [pr, pg, pb] = rgb(p);
+    const d = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2;
+    if (d < bestD) [best, bestD] = [p, d];
+  }
+  return best;
 }
 
 // Normalize a player entry so it fits the template.

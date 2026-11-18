@@ -59,5 +59,7 @@ export async function claimAnonDesigns(userId: string, anonId: string | undefine
   if (!anonId) return;
   const db = supabaseAdmin();
   await db.from("designs").update({ owner_id: userId, anon_id: null }).eq("anon_id", anonId).is("owner_id", null);
+  // saved brand boards too (no-op until migration 0003 has run)
+  await db.from("brand_boards").update({ owner_id: userId, anon_id: null }).eq("anon_id", anonId).is("owner_id", null);
   await db.from("anon_sessions").update({ claimed_by: userId }).eq("id", anonId);
 }

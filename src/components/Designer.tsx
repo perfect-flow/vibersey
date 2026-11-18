@@ -20,6 +20,8 @@ import { JerseyPreview } from "./JerseyPreview";
 import { logoAnchor } from "@/lib/render";
 import { ModelPreviewButton } from "./ModelPreview";
 import { SignupModal } from "./AuthForm";
+import { BrandBoard } from "./BrandBoard";
+import { LogoBuilder } from "./LogoBuilder";
 
 type Msg = { role: "user" | "assistant"; content: string };
 type Usage = { used: number; limit: number | null; allowed: boolean };
@@ -32,6 +34,16 @@ type CatalogProduct = {
 };
 
 const SPORT_EMOJI: Record<Sport, string> = { baseball: "⚾", basketball: "🏀", football: "🏈", hockey: "🏒", soccer: "⚽" };
+
+// The chat opens by building the brand board, so later edits stay on-brand.
+const BRAND_OPENER =
+  "Let's get started with a brand board! Do you have specific colors or logos? Upload images with the 📎 or share a link for some inspiration to get started.";
+const BRAND_STARTERS = [
+  "Our colors are navy and gold. I'll upload our logo",
+  "Pick bold, modern colors for me and design a logo",
+  "Build a brand for the Riverside Hawks: red, black and silver",
+  "Retro 90s vibe in teal and purple, aggressive mascot logo",
+];
 
 const STARTERS = [
   "Navy and gold, aggressive eagle logo, classic varsity numbers",
@@ -67,6 +79,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [size, setSize] = useState("");
   const [qty, setQty] = useState(1);
+  const [logosOpen, setLogosOpen] = useState(false);
   const chatEnd = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -119,6 +132,24 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
     },
     [locked]
   );
+
+  // Changes from the brand board and the logo builder. Saved like manual
+  // tweaks; a design that doesn't exist yet is created first.
+  const commit = (fn: (s: DesignSpec) => DesignSpec) => {
+    if (!spec || locked) return;
+    if (designIdRef.current) return patchSpec(fn);
+    const next = fn(structuredClone(spec));
+    setSpec(next);
+    return ensureDesign(next).then(() => undefined);
+  };
+  // fonts are part of the brand board, so a manual change updates it too
+  const setFont = (role: "wordmark" | "number" | "name", font: FontKey) =>
+    patchSpec((s) => ({
+      ...s,
+      wordmark: role === "wordmark" ? { ...s.wordmark, font } : s.wordmark,
+      lettering: role === "wordmark" ? s.lettering : { ...s.lettering, [role === "number" ? "numberFont" : "nameFont"]: font },
+      brand: s.brand ? { ...s.brand, fonts: { ...s.brand.fonts, [role]: font } } : s.brand,
+    }));
 
   // Logo placement: offsets are fractions of the fabric piece, relative to the
   // chosen spot. Dragging on the preview sets them directly.
@@ -193,7 +224,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
     setMessages([
       {
         role: "assistant",
-        content: `Let's design your ${STANDARDS[def.sport].label.toLowerCase()} jersey! Tell me your team name, colors, and any inspiration. You can also upload a logo or ask me to create one.`,
+        content: BRAND_OPENER,
       },
     ]);
   }
@@ -281,7 +312,9 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
   // survives a refresh or an immediate chat message.
   async function applyLogo(logo: DesignSpec["logo"]) {
     if (!spec) return;
-    const next: DesignSpec = { ...spec, logo };
+    // the jersey's main logo is the brand's main logo
+    const main = logo.url && logo.source ? { url: logo.url, source: logo.source, prompt: logo.prompt } : null;
+    const next: DesignSpec = { ...spec, logo, brand: spec.brand ? { ...spec.brand, logos: { ...spec.brand.logos, main } } : spec.brand };
     setSpec(next);
     const id = await ensureDesign(next);
     if (id) await api(`/api/design/${id}`, { method: "PATCH", body: JSON.stringify({ spec: next }) });
@@ -452,6 +485,9 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
             <button className="btn-ghost" onClick={() => setView(view === "front" ? "back" : "front")}>
               Show {view === "front" ? "back" : "front"}
             </button>
+            <button className="btn-ghost" onClick={() => setLogosOpen(true)} disabled={locked}>
+              Logos &amp; patches
+            </button>
             <button className="btn-ghost" onClick={save}>
               Save
             </button>
@@ -485,6 +521,8 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
         </div>
 
         {notice && <p className="text-sm text-volt">{notice}</p>}
+
+        <BrandBoard spec={spec} locked={locked} commit={commit} onOpenLogos={() => setLogosOpen(true)} onNotice={setNotice} />
 
         {/* manual controls */}
         <div className="card grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -529,7 +567,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
             <select
               className="input"
               value={spec.wordmark.font}
-              onChange={(e) => patchSpec((s) => ({ ...s, wordmark: { ...s.wordmark, font: e.target.value as FontKey } }))}
+              onChange={(e) => setFont("wordmark", e.target.value as FontKey)}
             >
               {Object.entries(FONTS).map(([k, f]) => (
                 <option key={k} value={k}>
@@ -565,7 +603,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
               <select
                 className="input"
                 value={spec.lettering[key]}
-                onChange={(e) => patchSpec((s) => ({ ...s, lettering: { ...s.lettering, [key]: e.target.value as FontKey } }))}
+                onChange={(e) => setFont(key === "numberFont" ? "number" : "name", e.target.value as FontKey)}
               >
                 {Object.entries(FONTS).map(([k, f]) => (
                   <option key={k} value={k}>
@@ -717,7 +755,7 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
             {busy && <div className="mr-8 animate-pulse rounded-xl bg-ink px-3 py-2 text-sm text-muted">Designing…</div>}
             {messages.length <= 1 && !busy && (
               <div className="space-y-2 pt-2">
-                {STARTERS.map((s) => (
+                {(spec.brand ? STARTERS : BRAND_STARTERS).map((s) => (
                   <button key={s} onClick={() => send(s)} className="block w-full rounded-lg border border-line px-3 py-2 text-left text-xs text-muted hover:border-volt hover:text-white">
                     {s}
                   </button>
@@ -804,6 +842,21 @@ export function Designer({ initialDesignId }: { initialDesignId?: string }) {
           <p className="text-xs text-muted">Printed with {spec.sample.name || "no name"} {spec.sample.number && `#${spec.sample.number}`}. Ordering for a team? Use Team template.</p>
         </div>
       </aside>
+
+      {logosOpen && (
+        <LogoBuilder
+          spec={spec}
+          locked={locked}
+          commit={commit}
+          upload={(f) => uploadImage(f, "logo")}
+          onClose={() => setLogosOpen(false)}
+          onSignup={(r) => {
+            setLogosOpen(false);
+            setSignup(r);
+          }}
+          onUsage={setUsage}
+        />
+      )}
 
       <SignupModal open={!!signup} reason={signup ?? ""} onClose={() => setSignup(null)} next={designId ? `/design/${designId}` : "/"} />
     </section>
