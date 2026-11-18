@@ -93,7 +93,8 @@ export const STANDARDS: Record<Sport, SportStandard> = {
   hockey: {
     label: "Hockey",
     layout: {
-      front: {},
+      // team name across the chest; with a crest it moves below it (render.ts)
+      front: { wordmark: { x: 0.5, y: 0.38, h: 0.08, w: 0.72 } },
       back: {
         name: { x: 0.5, y: 0.18, h: 0.045, w: 0.6 },
         number: { x: 0.5, y: 0.4, h: 0.24 },
@@ -105,7 +106,7 @@ export const STANDARDS: Record<Sport, SportStandard> = {
     numbersDefault: { front: false, back: true, sleeves: true },
     nameDefault: true,
     guidance:
-      "Hockey: a large crest logo centered on the chest, no front number. Horizontal stripes at the waist hem and on the sleeves are traditional. Back: player name above a large number; numbers also on both sleeves above the elbow. Shoulder yoke in a contrasting color is common.",
+      "Hockey: a large crest logo centered on the chest, no front number. A team name across the chest is optional (some teams use it instead of a crest); with a crest it sits below it. Horizontal stripes at the waist hem and on the sleeves are traditional. Back: player name above a large number; numbers also on both sleeves above the elbow. Shoulder yoke in a contrasting color is common.",
   },
   soccer: {
     label: "Soccer",
