@@ -8,6 +8,8 @@ Design a custom sports jersey by chatting with AI, then have Printful print and 
 
 1. **Pick a jersey.** Only the Printful all-over-print jerseys listed in `src/lib/catalog.ts` (`PRODUCTS`) are offered: baseball, basketball (premium, recycled, youth), football (American, boxy), soccer (recycled, youth) and hockey.
 2. **Chat with the AI designer.** The chat model (`OPENROUTER_CHAT_MODEL`) turns the conversation into a structured `DesignSpec` (colors, pattern, trim, wordmark, fonts, which panels carry the name and number), following each sport's conventions (`STANDARDS` in `catalog.ts`). When something more creative is needed, it writes a prompt for the image model (`OPENROUTER_IMAGE_MODEL`), which paints **text-free** artwork or a logo. AI logos get their white background knocked out automatically. Customers can also upload a logo or attach an inspiration image.
+   **Brand board.** The chat opens by building a brand board (`spec.brand`: name, five color roles plus extras, fonts, style note, main and alternate logos). Once it exists, every AI turn is held to it (`keepOnBrand` in `src/lib/designer.ts`): colors the AI introduces snap to the brand palette (plus white and black), fonts follow the brand fonts, and the brand logos stay on. The AI changes the brand only through its separate `brand` field when the customer asks. Pasted links are read for their preview image, title and theme color. Boards can be saved (`/api/brands`, table `brand_boards`, migration `0003`) and applied to other jerseys.
+   **Logos & patches.** A builder separate from the chat (`src/components/LogoBuilder.tsx`, `/api/brand/logo`) uploads, generates or edits (current logo sent as the image reference) the main and alternate logos, and places the alternate logo and captain C/A patches using each sport's conventions (`PATCH_SPOTS`, `DEFAULT_PATCH_POSITION`, `PATCH_GUIDANCE` in `catalog.ts`).
 3. **Names and numbers are drawn by code**, never by the image model, using the bundled fonts in `public/fonts`. `src/lib/render.ts` renders every print panel as SVG; the browser preview and the server-side print files (rendered to PNG with resvg) use the same function. That's what guarantees a team template is the exact same design and fonts for every player, with only the name and number changing.
 4. **Free limit.** Anonymous visitors get 5 AI design/edit turns (`ANON_FREE_GENERATIONS`), tracked by a cookie in `anon_sessions`. After that they create a free account (passwordless email link). Their drafts move to the new account automatically.
 5. **Pricing** is Printful's variant cost + $20 (`MARKUP_CENTS`), plus flat shipping (`SHIPPING_FLAT_CENTS`).
@@ -16,7 +18,7 @@ Design a custom sports jersey by chatting with AI, then have Printful print and 
 
 ## Setup
 
-1. **Supabase:** create a project, run `supabase/migrations/0001_init.sql` in the SQL editor. Under Authentication > URL configuration, add `https://<your-domain>/auth/callback` as a redirect URL.
+1. **Supabase:** create a project, run the files in `supabase/migrations/` in order (`0001_init.sql`, `0002_team_kits.sql`, `0003_brand_boards.sql`) in the SQL editor. Under Authentication > URL configuration, add `https://<your-domain>/auth/callback` as a redirect URL.
 2. **Env vars:** copy `.env.example` to `.env.local` (and into Vercel project settings) and fill it in.
 3. **Catalog sync:** after deploying, pull products, sizes, costs and print-file sizes from Printful:
    ```sh

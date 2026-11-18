@@ -151,6 +151,91 @@ export const DEFAULT_LOGO_POSITION: Record<Sport, Exclude<LogoPosition, "auto">>
   soccer: "left_chest",
 };
 
+// Patches: the alternate logo (shoulder badge, sleeve patch, jock tag) and the
+// captain's C / A. "left" and "right" are the wearer's, so left_chest is the
+// viewer's right and left_shoulder is the sleeve_left panel.
+export const PATCH_POSITIONS = ["auto", "shoulders", "left_shoulder", "right_shoulder", "left_chest", "right_chest", "upper_back", "jock_tag"] as const;
+export type PatchPosition = (typeof PATCH_POSITIONS)[number];
+export type PatchKind = "alternate" | "captain";
+
+export const PATCH_POSITION_LABELS: Record<PatchPosition, string> = {
+  auto: "Standard spot",
+  shoulders: "Both shoulders",
+  left_shoulder: "Left shoulder",
+  right_shoulder: "Right shoulder",
+  left_chest: "Upper left chest",
+  right_chest: "Upper right chest",
+  upper_back: "Upper back",
+  jock_tag: "Front hem tag",
+};
+
+// Boxes are piece-relative like LayoutBox. Shoulder spots differ between long
+// sleeves (hockey: the top of the sleeve, under the shoulder piece and above
+// the sleeve number) and short sleeves (the middle of the cap). Chest spots
+// are pushed below the neckline when the jersey's neck dips into the piece.
+// Jerseys with a separate shoulder piece (hockey, American football) wear
+// shoulder patches on that piece, near each end ("yoke" boxes; the viewer's
+// right end is the wearer's left shoulder).
+export const YOKE_PATCH_SPOTS: Partial<Record<Exclude<PatchPosition, "auto">, LayoutBox[]>> = {
+  shoulders: [
+    { x: 0.2, y: 0.47, h: 0.24, w: 0.13 },
+    { x: 0.8, y: 0.47, h: 0.24, w: 0.13 },
+  ],
+  left_shoulder: [{ x: 0.8, y: 0.47, h: 0.24, w: 0.13 }],
+  right_shoulder: [{ x: 0.2, y: 0.47, h: 0.24, w: 0.13 }],
+};
+
+export const PATCH_SPOTS: Record<Exclude<PatchPosition, "auto">, { long?: Partial<Record<Placement, LayoutBox>>; short?: Partial<Record<Placement, LayoutBox>> } & Partial<Record<Placement, LayoutBox>>> = {
+  shoulders: {
+    long: { sleeve_left: { x: 0.5, y: 0.26, h: 0.1, w: 0.36 }, sleeve_right: { x: 0.5, y: 0.26, h: 0.1, w: 0.36 } },
+    short: { sleeve_left: { x: 0.5, y: 0.45, h: 0.3, w: 0.4 }, sleeve_right: { x: 0.5, y: 0.45, h: 0.3, w: 0.4 } },
+  },
+  left_shoulder: {
+    long: { sleeve_left: { x: 0.5, y: 0.26, h: 0.1, w: 0.36 } },
+    short: { sleeve_left: { x: 0.5, y: 0.45, h: 0.3, w: 0.4 } },
+  },
+  right_shoulder: {
+    long: { sleeve_right: { x: 0.5, y: 0.26, h: 0.1, w: 0.36 } },
+    short: { sleeve_right: { x: 0.5, y: 0.45, h: 0.3, w: 0.4 } },
+  },
+  left_chest: { front: { x: 0.72, y: 0.2, h: 0.08, w: 0.14 } },
+  right_chest: { front: { x: 0.28, y: 0.2, h: 0.08, w: 0.14 } },
+  upper_back: { back: { x: 0.5, y: 0.075, h: 0.055, w: 0.16 } },
+  jock_tag: { front: { x: 0.24, y: 0.9, h: 0.06, w: 0.12 } },
+};
+
+// Sport-specific tweaks to a spot (e.g. hockey captains sit high and wide on
+// the chest so the letter clears the big center crest).
+export const PATCH_SPOT_OVERRIDES: Partial<Record<Sport, Partial<Record<Exclude<PatchPosition, "auto">, Partial<Record<Placement, LayoutBox>>>>>> = {
+  hockey: {
+    left_chest: { front: { x: 0.79, y: 0.13, h: 0.085, w: 0.13 } },
+    right_chest: { front: { x: 0.21, y: 0.13, h: 0.085, w: 0.13 } },
+  },
+};
+
+// Where each sport usually wears its patches ("auto").
+export const DEFAULT_PATCH_POSITION: Record<Sport, Record<PatchKind, Exclude<PatchPosition, "auto">>> = {
+  hockey: { alternate: "shoulders", captain: "left_chest" },
+  football: { alternate: "upper_back", captain: "left_chest" },
+  baseball: { alternate: "left_shoulder", captain: "left_chest" },
+  soccer: { alternate: "right_shoulder", captain: "left_shoulder" },
+  basketball: { alternate: "jock_tag", captain: "left_chest" },
+};
+
+// Jersey etiquette the AI and the logo builder explain to the customer.
+export const PATCH_GUIDANCE: Record<Sport, string> = {
+  hockey:
+    "Hockey: the primary crest is big and centered on the chest. Alternate logos (a simpler secondary mark) go on BOTH shoulders, on the shoulder yoke above the sleeve numbers. Captains wear a C and alternate captains an A on the upper left chest (some teams use the right).",
+  football:
+    "Football: the main logo is small near the collar or on the sleeves/shoulders; an alternate mark often sits on the upper back below the collar. The captain's C patch goes on the upper left chest.",
+  baseball:
+    "Baseball: the wordmark is across the chest; the alternate logo is a patch on the left sleeve (some teams put a second patch on the right sleeve). Captains, when used, wear a small C on the upper left chest.",
+  soccer:
+    "Soccer: the club crest is on the left chest; a league or alternate badge goes on the right sleeve. The captain wears an armband on the left arm, shown here as a C patch on the left sleeve.",
+  basketball:
+    "Basketball: tanks have no sleeves, so the alternate logo usually goes on the front hem tag (jock tag) or the upper back below the collar. Captain letters are uncommon; a small C on the upper left chest works.",
+};
+
 export type ProductKey =
   | "baseball-recycled"
   | "basketball-premium"

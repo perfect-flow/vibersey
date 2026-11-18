@@ -12,7 +12,8 @@ const FONT_DIR = path.join(process.cwd(), "public", "fonts");
 const fontFiles = Object.values(FONTS).map((f) => path.join(FONT_DIR, f.file));
 
 async function inlineImages(spec: DesignSpec) {
-  const urls = [spec.pattern.style === "artwork" ? spec.pattern.artworkUrl : null, spec.logo.url].filter(
+  const alt = spec.patches?.alternate;
+  const urls = [spec.pattern.style === "artwork" ? spec.pattern.artworkUrl : null, spec.logo.url, alt?.show ? alt.url : null].filter(
     (u): u is string => !!u
   );
   const map = new Map<string, string>();

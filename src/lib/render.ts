@@ -5,7 +5,7 @@
 // The artwork, colors and fonts come from the saved DesignSpec; only the
 // player's name and number vary between team members.
 
-import { STANDARDS, LOGO_SPOTS, DEFAULT_LOGO_POSITION, productByKey, type LayoutBox, type Placement } from "./catalog";
+import { STANDARDS, LOGO_SPOTS, DEFAULT_LOGO_POSITION, PATCH_SPOTS, PATCH_SPOT_OVERRIDES, YOKE_PATCH_SPOTS, DEFAULT_PATCH_POSITION, productByKey, type LayoutBox, type Placement, type PatchKind, type PatchPosition } from "./catalog";
 import { FONTS, type DesignSpec, type Player } from "./design-spec";
 import { pieceFor } from "./garments";
 
@@ -204,6 +204,83 @@ export function logoRect(spec: DesignSpec, placement: Placement): LayoutBox | un
   return b ? inPiece(b, pieceBox(spec, placement)) : undefined;
 }
 
+// Where a patch (alternate logo or captain letter) sits on a panel, in piece
+// fractions. Empty when it isn't on this panel. Shoulder spots use the
+// separate shoulder piece when the jersey has one.
+function patchPosition(spec: DesignSpec, kind: PatchKind): Exclude<PatchPosition, "auto"> {
+  const p = spec.patches?.[kind];
+  return !p?.position || p.position === "auto" ? DEFAULT_PATCH_POSITION[spec.sport][kind] : p.position;
+}
+const hasYoke = (spec: DesignSpec) => !!productByKey(spec.product)?.placements.includes("yoke");
+
+export function patchBoxes(spec: DesignSpec, kind: PatchKind, placement: Placement): LayoutBox[] {
+  const p = spec.patches?.[kind];
+  if (!p) return [];
+  const pos = patchPosition(spec, kind);
+  const yokeBoxes = hasYoke(spec) ? YOKE_PATCH_SPOTS[pos] : undefined;
+  const isSleeve = placement === "sleeve_left" || placement === "sleeve_right";
+  let bases: LayoutBox[];
+  if (yokeBoxes) bases = placement === "yoke" ? yokeBoxes : [];
+  else {
+    const spot = PATCH_SPOTS[pos];
+    const sized = isSleeve ? (isLongSleeve(spec, placement) ? spot.long : spot.short) : undefined;
+    const b = PATCH_SPOT_OVERRIDES[spec.sport]?.[pos]?.[placement] ?? sized?.[placement] ?? spot[placement];
+    bases = b ? [b] : [];
+  }
+  const k = p.scale ?? 1;
+  return bases.map((base) => {
+    const h = Math.min(base.h * k, 0.5);
+    const w = base.w ? Math.min(base.w * k, 0.8) : undefined;
+    let y = base.y;
+    // keep chest patches below the neckline
+    if (placement === "front" && base.y < 0.5) y = Math.max(y, (pieceFor(spec.product, placement).neck ?? 0) + h / 2 + 0.03);
+    return { x: base.x, y, h, w };
+  });
+}
+
+// Is a patch spot available on this jersey? (No shoulders on a tank top.)
+export function patchSpotFits(spec: DesignSpec, pos: PatchPosition, kind: PatchKind): boolean {
+  const placements = placementsFor(spec);
+  const real = pos === "auto" ? DEFAULT_PATCH_POSITION[spec.sport][kind] : pos;
+  if (placements.includes("yoke") && YOKE_PATCH_SPOTS[real]) return true;
+  const spot = PATCH_SPOTS[real];
+  const panels = new Set<string>([...Object.keys(spot.long ?? {}), ...Object.keys(spot.short ?? {}), ...Object.keys(spot).filter((k) => k !== "long" && k !== "short")]);
+  return [...panels].some((pl) => placements.includes(pl as Placement));
+}
+
+function patchEls(spec: DesignSpec, placement: Placement, pb: PBox, o: RenderOptions): string[] {
+  const { width: W, height: H } = o;
+  const out: string[] = [];
+  const alt = spec.patches?.alternate;
+  const altHref = alt?.show && alt.url ? (o.resolveImage ? o.resolveImage(alt.url) : alt.url) : undefined;
+  if (altHref) {
+    for (const b of patchBoxes(spec, "alternate", placement)) {
+      const box = inPiece(b, pb);
+      const h = box.h * H;
+      const w = box.w ? box.w * W : h;
+      out.push(`<image href="${esc(altHref)}" x="${box.x * W - w / 2}" y="${box.y * H - h / 2}" width="${w}" height="${h}" preserveAspectRatio="xMidYMid meet"/>`);
+    }
+  }
+  const cap = spec.patches?.captain;
+  if (!cap || cap.letter === "none") return out;
+  const font = spec.lettering.numberFont;
+  patchBoxes(spec, "captain", placement).forEach((b, i) => {
+    const box = inPiece(b, pb);
+    const id = `${o.idPrefix ?? ""}cp-${placement}-${i}`;
+    if (cap.style === "patch") {
+      // a sewn-on style patch: rounded square in the second color with the letter inside
+      const s = Math.min(box.h * H, (box.w ?? box.h) * W);
+      out.push(
+        `<rect x="${(box.x * W - s / 2).toFixed(1)}" y="${(box.y * H - s / 2).toFixed(1)}" width="${s.toFixed(1)}" height="${s.toFixed(1)}" rx="${(s * 0.18).toFixed(1)}" fill="${spec.colors.secondary}" stroke="${spec.colors.outline}" stroke-width="${(s * 0.06).toFixed(1)}"/>`,
+        textEl({ id, text: cap.letter, font, box: { x: box.x, y: box.y, h: box.h * 0.55 }, W, H, fill: spec.colors.primary, stroke: spec.colors.primary, outline: 0 })
+      );
+    } else {
+      out.push(textEl({ id, text: cap.letter, font, box: { x: box.x, y: box.y, h: box.h }, W, H, fill: spec.colors.text, stroke: spec.colors.outline, outline: Math.max(0.06, spec.lettering.outlineWidth) }));
+    }
+  });
+  return out;
+}
+
 function overlaps(a: LayoutBox, b: LayoutBox) {
   return Math.abs(a.x - b.x) < ((a.w ?? a.h) + (b.w ?? b.h)) / 2 && Math.abs(a.y - b.y) < (a.h + b.h) / 2;
 }
@@ -269,6 +346,9 @@ export function renderPanelInner(spec: DesignSpec, placement: Placement, o: Rend
       );
     }
   }
+
+  // alternate-logo patches and the captain's letter
+  els.push(...patchEls(spec, placement, pb, o));
 
   // team wordmark
   if (layout.wordmark && spec.wordmark.show && spec.wordmark.text) {
