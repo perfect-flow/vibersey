@@ -10,8 +10,8 @@ export async function Header() {
   }
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-ink/90 backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
-        {/* Plain links (full page load) so the logo always returns to the jersey picker,
+      <div className="mx-auto flex h-14 max-w-[1600px] items-center justify-between px-4">
+        {/* Plain links (full page load) so the logo always returns to a fresh builder,
             even from an unsaved design that is still on "/". */}
         {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
         <a href="/" aria-label="Vibersey home" className="font-display text-3xl tracking-wider text-white">
