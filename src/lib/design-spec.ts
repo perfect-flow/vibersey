@@ -52,6 +52,11 @@ export const DesignSpecSchema = z.object({
     yoke: z.boolean().default(false), // contrasting shoulder band
     hemStripes: z.boolean().default(false),
     sleeveStripes: z.boolean().default(false),
+    // move the stripes up (negative) or down, as a fraction of the front body
+    // piece / the sleeve. Hem stripes move together on front and back so they
+    // always meet at the side seams.
+    hemStripesOffsetY: z.number().min(-0.3).max(0.06).default(0),
+    sleeveStripesOffsetY: z.number().min(-0.3).max(0.15).default(0),
   }),
   logo: z.object({
     url: z.string().url().nullable().default(null),
