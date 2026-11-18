@@ -34,7 +34,7 @@ export type ProductDetails = {
 };
 
 const CACHE_DAYS = 7;
-const VERSION = 1; // bump to drop old caches when the shape changes
+const VERSION = 2; // bump to drop old caches when the shape changes
 const cachePath = (key: string) => `details/${key}.v${VERSION}.json`;
 
 type V1Product = {
@@ -87,7 +87,12 @@ function htmlToText(html: string) {
       .replace(/&nbsp;/g, " ")
       .replace(/&amp;/g, "&")
       .replace(/&quot;/g, '"')
-      .replace(/&#39;|&rsquo;/g, "'")
+      .replace(/&#39;|&rsquo;|&lsquo;/g, "'")
+      .replace(/&Prime;/g, "″")
+      .replace(/&prime;/g, "′")
+      .replace(/&ndash;/g, "–")
+      .replace(/&mdash;/g, "—")
+      .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
       .replace(/\n{3,}/g, "\n\n")
   );
 }
@@ -119,7 +124,8 @@ const TABLE_TITLES: Record<SizeTable["kind"], string> = {
 };
 
 function sizeTables(raw: V1Sizes, unit: string): SizeTable[] {
-  const sizes = raw.available_sizes ?? [];
+  // youth sizes come back as numbers (8, 10, ...)
+  const sizes = (raw.available_sizes ?? []).map(String);
   return (raw.size_tables ?? [])
     .filter((t) => t.unit === unit || t.type === "international" || t.unit === "none")
     .map((t) => ({
@@ -132,7 +138,7 @@ function sizeTables(raw: V1Sizes, unit: string): SizeTable[] {
       rows: t.measurements.map((m) => ({
         label: m.type_label,
         values: sizes.map((s) => {
-          const v = m.values.find((x) => x.size === s);
+          const v = m.values.find((x) => String(x.size) === s);
           if (!v) return "–";
           if (v.value != null) return v.value;
           return v.min_value != null && v.max_value != null ? `${v.min_value}–${v.max_value}` : (v.min_value ?? v.max_value ?? "–");
@@ -170,8 +176,10 @@ async function photos(id: number, fallback: string): Promise<DetailPhoto[]> {
       for (const img of first?.images ?? []) {
         add(img.image_url, (img.mockup_style_id && titles.get(img.mockup_style_id)) || img.placement, img.background_color, img.background_image);
       }
-      // model shots first
-      out.sort((a, b) => Number(MODEL_STYLE.test(b.title)) - Number(MODEL_STYLE.test(a.title)));
+      // lifestyle, then on-model, then flat; fronts before backs
+      const rank = (t: string) =>
+        (/lifestyle/i.test(t) ? 0 : MODEL_STYLE.test(t) ? 10 : 20) + (/front/i.test(t) ? 0 : /back/i.test(t) ? 2 : 1);
+      out.sort((a, b) => rank(a.title) - rank(b.title));
     }
   } catch (e) {
     console.warn("product-details: images failed", id, (e as Error).message);
@@ -202,7 +210,7 @@ async function build(key: ProductKey): Promise<ProductDetails> {
     notes,
     photos: await photos(id, p.image),
     sizeTables: { inches: inches ? sizeTables(inches, "inches") : [], cm: cm ? sizeTables(cm, "cm") : [] },
-    availableSizes: inches?.available_sizes ?? cm?.available_sizes ?? [],
+    availableSizes: (inches?.available_sizes ?? cm?.available_sizes ?? []).map(String),
     fulfillmentDays: p.avg_fulfillment_time ?? null,
     origin: p.origin_country ?? null,
   };
